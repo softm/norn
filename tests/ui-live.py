@@ -22,6 +22,7 @@ with tempfile.TemporaryDirectory() as temp:
    b=pw.chromium.launch(headless=True,**({'executable_path':os.environ['NORN_CHROMIUM']} if os.environ.get('NORN_CHROMIUM') else {}));page=b.new_page(viewport={'width':1440,'height':1000});page.on('pageerror',lambda e:errors.append(str(e)));page.on('dialog',lambda d:d.accept())
    page.goto(server.origin,wait_until='networkidle');page.screenshot(path=str(out/'home.png'),full_page=True);checks.append('homepage loads from actual Python HTTP server')
    page.locator('[data-action=account]').first.click();page.locator('[data-action=login]').click();page.wait_for_selector('.error-box');assert 'Firebase' in page.locator('.error-box').inner_text();page.locator('[data-action=guest]').click();assert page.locator('.clip').count()==3;checks.append('unconfigured Google login fails honestly; explicit local trial works')
+   page.goto('about:blank')
    page.goto(server.origin+'/#connect='+urllib.parse.quote(server.origin+'|'+app.token),wait_until='networkidle');page.wait_for_selector('#workflow-nav');assert page.locator('.clip').count()==2;checks.append('authenticated browser-engine pairing loads actual folder')
    page.locator('#library-search').fill('영상');assert page.locator('.asset:visible').count()==1;page.locator('#library-search').fill('');checks.append('resource name filtering')
    page.locator('.asset .view').first.click();assert page.locator('.modal img').count()==1;page.locator('[data-action=view-next]').click();assert page.locator('.modal video').count()==1;page.locator('[data-action=close]').click();checks.append('original photo and video lightbox navigation')
@@ -44,5 +45,7 @@ with tempfile.TemporaryDirectory() as temp:
    page.set_viewport_size({'width':390,'height':844});page.wait_for_timeout(300);page.evaluate('scrollTo(0,650)');r=page.locator('#progress').bounding_box();assert r and 55<=r['y']<=65;assert page.evaluate('document.documentElement.scrollWidth')<=395;page.screenshot(path=str(out/'mobile.png'),full_page=True);checks.append('mobile layout and always-visible progress panel')
    assert not errors,errors;b.close()
   assert {p.name:core.file_hash(p) for p in source.iterdir()}==original;checks.append('all original file hashes unchanged')
- finally:server.shutdown();server.server_close()
+ finally:
+  (out/'partial-checks.json').write_text(json.dumps({'checks':checks,'count':len(checks),'pageErrors':errors},ensure_ascii=False,indent=2))
+  server.shutdown();server.server_close()
 (out/'result.json').write_text(json.dumps({'checks':checks,'count':len(checks),'pageErrors':errors,'scope':'real browser + loopback FFmpeg; live Google OAuth and Ollama not tested'},ensure_ascii=False,indent=2));print(json.dumps(checks,ensure_ascii=False,indent=2))
