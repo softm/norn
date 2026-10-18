@@ -1,4 +1,4 @@
-import * as Cloud from './firebase.js';
+import * as Cloud from './firebase-v2.js';
 import {configStatus,authMessage} from './firebase-config-utils.js';
 const el=id=>document.getElementById(id);
 function status(id,text,ok=null){const n=el(id);n.textContent=text;n.className=ok===null?'':ok?'ok':'bad';}
@@ -22,3 +22,5 @@ el('check-db').onclick=async()=>{
   finally{el('check-db').disabled=false;}
 };
 await check();
+
+const probe=document.createElement('section');probe.className='setup-section';probe.innerHTML='<h2>저장·복원 검사</h2><p>본인 계정에 작은 임시 검사 문서를 만들고 읽은 뒤 삭제합니다. 원본·편집 프로젝트는 변경하지 않습니다.</p><button id="probe-storage">저장·읽기·삭제 검사</button><p id="probe-status" role="status"></p>';document.querySelector('main').append(probe);el('probe-storage').onclick=async()=>{el('probe-storage').disabled=true;try{await Cloud.testConnection();status('probe-status','실제 임시 문서 저장·읽기·삭제에 성공했습니다.',true)}catch(e){status('probe-status',authMessage(e),false)}finally{el('probe-storage').disabled=false}};

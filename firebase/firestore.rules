@@ -2,29 +2,41 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     function owner(uid) { return request.auth != null && request.auth.uid == uid; }
+    function projectShape(d) {
+      return d.keys().hasOnly(['schema_version','title','description','publicNote','posts','assets','analysis','activeVariant','frames','targetDuration','revision','updatedAt','variantIds'])
+        && d.schema_version == 2 && d.title is string && d.title.size() <= 160
+        && d.description is string && d.description.size() <= 6000
+        && d.get('publicNote','') is string && d.get('publicNote','').size() <= 6000
+        && d.get('posts',{}) is map && d.get('posts',{}).size() <= 12
+        && d.get('assets',[]) is list && d.get('assets',[]).size() <= 600
+        && d.get('analysis',{}) is map
+        && d.frames is int && d.frames >= 1 && d.frames <= 20
+        && d.targetDuration is number && d.targetDuration >= 1 && d.targetDuration <= 3600
+        && d.revision is int && d.updatedAt == request.time
+        && d.variantIds is list && d.variantIds.size() >= 1 && d.variantIds.size() <= 12
+        && d.activeVariant is string && d.activeVariant in d.variantIds;
+    }
+    function variantShape(d,variantId) {
+      return d.keys().hasOnly(['schema_version','id','name','mode','targetDuration','settings','audio','scenes'])
+        && d.schema_version == 2 && d.id == variantId
+        && d.name is string && d.name.size() <= 160
+        && d.get('mode','free') in ['short','long','timelapse','photo','free']
+        && d.get('targetDuration',30) is number && d.get('targetDuration',30) >= 1 && d.get('targetDuration',30) <= 3600
+        && d.settings is map && d.settings.keys().hasOnly(['width','height','fps'])
+        && d.settings.width is number && d.settings.width >= 144 && d.settings.width <= 3840
+        && d.settings.height is number && d.settings.height >= 144 && d.settings.height <= 3840
+        && d.settings.fps is number && d.settings.fps >= 10 && d.settings.fps <= 60
+        && d.audio is map && d.audio.keys().hasOnly(['mute_original','original_volume','music_id','music_volume','music_start','loop','fade_in','fade_out'])
+        && d.scenes is list && d.scenes.size() <= 120;
+    }
     match /users/{uid}/projects/{projectId} {
       allow read, delete: if owner(uid);
-      allow create, update: if owner(uid)
-        && request.resource.data.keys().hasOnly(['schema_version','title','description','activeVariant','frames','targetDuration','revision','updatedAt','variantIds'])
-        && request.resource.data.schema_version == 2
-        && request.resource.data.title is string && request.resource.data.title.size() <= 160
-        && request.resource.data.description is string && request.resource.data.description.size() <= 6000
-        && request.resource.data.activeVariant is string
-        && request.resource.data.frames is int && request.resource.data.frames >= 1 && request.resource.data.frames <= 20
-        && request.resource.data.targetDuration is number && request.resource.data.targetDuration >= 1 && request.resource.data.targetDuration <= 3600
-        && request.resource.data.revision is int && request.resource.data.revision >= 1
-        && request.resource.data.updatedAt == request.time
-        && request.resource.data.variantIds is list && request.resource.data.variantIds.size() >= 1 && request.resource.data.variantIds.size() <= 12;
+      allow create: if owner(uid) && projectShape(request.resource.data) && request.resource.data.revision == 1;
+      allow update: if owner(uid) && projectShape(request.resource.data) && request.resource.data.revision == resource.data.revision + 1;
       match /variants/{variantId} {
         allow read, delete: if owner(uid);
-        allow create, update: if owner(uid)
-          && request.resource.data.keys().hasOnly(['schema_version','id','name','settings','audio','scenes'])
-          && request.resource.data.schema_version == 2
-          && request.resource.data.id == variantId
-          && request.resource.data.name is string && request.resource.data.name.size() <= 160
-          && request.resource.data.settings is map
-          && request.resource.data.audio is map
-          && request.resource.data.scenes is list && request.resource.data.scenes.size() <= 120;
+        allow create, update: if owner(uid) && variantShape(request.resource.data,variantId)
+          && variantId in getAfter(/databases/$(database)/documents/users/$(uid)/projects/$(projectId)).data.variantIds;
       }
     }
     match /users/{uid}/settings/{settingId} {
@@ -32,8 +44,12 @@ service cloud.firestore {
       allow create, update: if owner(uid) && settingId == 'defaults'
         && request.resource.data.keys().hasOnly(['frames','theme','updatedAt'])
         && request.resource.data.frames is int && request.resource.data.frames >= 1 && request.resource.data.frames <= 20
-        && request.resource.data.theme == 'warm'
-        && request.resource.data.updatedAt == request.time;
+        && request.resource.data.theme == 'warm' && request.resource.data.updatedAt == request.time;
+    }
+    match /users/{uid}/diagnostics/{id} {
+      allow read, delete: if owner(uid);
+      allow create: if owner(uid) && request.resource.data.keys().hasOnly(['schema_version','createdAt'])
+        && request.resource.data.schema_version == 1 && request.resource.data.createdAt == request.time;
     }
     match /{document=**} { allow read, write: if false; }
   }
