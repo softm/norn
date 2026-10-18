@@ -3,7 +3,7 @@ import {cloudProject} from './domain.js';
 let services=null;let configuration=null;
 export async function config(){if(!configuration){configuration=await fetch('./firebase-config.json',{cache:'no-store'}).then(r=>{if(!r.ok)throw Error('설정 파일을 읽지 못했습니다.');return r.json()})}return configuration}
 export async function firebase(){if(services)return services;const c=await config();if(!c.enabled||!c.firebase?.projectId||!c.firebase?.apiKey||!c.firebase?.authDomain||!c.firebase?.appId)throw Error('Firebase 운영 프로젝트가 아직 연결되지 않았습니다. 체험은 별도로 이용할 수 있습니다.');
- const root='https://www.gstatic.com/firebasejs/12.4.0/';
+ const root='https://www.gstatic.com/firebasejs/13.0.0/';
  const [a,auth,db]=await Promise.all([import(root+'firebase-app.js'),import(root+'firebase-auth.js'),import(root+'firebase-firestore.js')]);
  const app=a.initializeApp(c.firebase);const authentication=auth.getAuth(app);authentication.languageCode='ko';
  const database=db.initializeFirestore(app,{localCache:db.memoryLocalCache()});

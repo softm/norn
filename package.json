@@ -10,8 +10,8 @@
     "test:rules": "firebase emulators:exec --only firestore --project demo-norn 'node --test tests/firestore.test.mjs'"
   },
   "devDependencies": {
-    "firebase": "12.4.0",
-    "@firebase/rules-unit-testing": "5.0.0",
-    "firebase-tools": "^14.0.0"
+    "firebase": "13.0.0",
+    "@firebase/rules-unit-testing": "6.0.0",
+    "firebase-tools": "15.34.0"
   }
 }
