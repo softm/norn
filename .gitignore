@@ -22,3 +22,8 @@ docs/screenshots/
 *.ttf
 *.otf
 *.ttc
+
+# Local Firebase setup backups / selected deployment target (no admin keys in repo)
+.norn/
+firebase.norn.local.json
+*.local.json

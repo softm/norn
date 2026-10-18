@@ -12,7 +12,8 @@ def bundle(name,src,imports=''):
  src=re.sub(r'^import .*?;\s*$','',src,flags=re.M).replace('export ','')
  return f'const {name}=(()=>{{{imports}\n{src}\nreturn {{{",".join(exports)}}};}})();'
 domain=bundle('D',(root/'public/domain.js').read_text())
-cloud=bundle('Cloud',(root/'public/firebase.js').read_text(),'const {cloudProject}=D;')
+settings=bundle('Settings',(root/'public/firebase-config-utils.js').read_text())
+cloud=bundle('Cloud',(root/'public/firebase.js').read_text(),'const {cloudProject}=D; const {normalizeConfig,authMessage}=Settings;')
 app=re.sub(r'^import .*?;\s*$','',(root/'public/app.js').read_text(),flags=re.M)
 setup="""
 const store=()=>{const m=new Map();return {getItem:k=>m.get(k)??null,setItem:(k,v)=>m.set(k,String(v)),removeItem:k=>m.delete(k)}};
@@ -23,7 +24,7 @@ window.fetch=async url=>{if(url==='./firebase-config.json')return new Response(J
 html='<html lang="ko"><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>'+(root/'public/style.css').read_text()+'</style></head><body><div id="app"></div><div id="modal-root"></div><div id="toast"></div></body></html>'
 checks=[];errors=[]
 with sync_playwright() as p:
- b=p.chromium.launch(executable_path='/usr/bin/chromium',headless=True,args=['--no-sandbox']);t=b.new_page(viewport={'width':1440,'height':1000});t.on('pageerror',lambda e:errors.append(str(e)));t.set_content(html);t.add_script_tag(content=setup+domain+cloud+app);t.wait_for_timeout(500)
+ b=p.chromium.launch(executable_path='/usr/bin/chromium',headless=True,args=['--no-sandbox']);t=b.new_page(viewport={'width':1440,'height':1000});t.on('pageerror',lambda e:errors.append(str(e)));t.set_content(html);t.add_script_tag(content=setup+domain+settings+cloud+app);t.wait_for_timeout(500)
  if errors: print('START_ERRORS',errors,flush=True)
  t.screenshot(path=str(out/'home-desktop.png'),full_page=True);checks.append('landing renders with bundled local samples')
  t.locator('[data-action=account]').first.click();t.locator('[data-action=login]').click();t.wait_for_selector('.error-box');assert 'Firebase' in t.locator('.error-box').inner_text();checks.append('unconfigured Firebase shows error instead of false login')
