@@ -1,0 +1,17 @@
+{
+  "hosting": {
+    "public": "public",
+    "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
+    "headers": [
+      {"source":"**", "headers":[
+        {"key":"Referrer-Policy","value":"no-referrer"},
+        {"key":"X-Content-Type-Options","value":"nosniff"},
+        {"key":"Cross-Origin-Opener-Policy","value":"same-origin-allow-popups"},
+        {"key":"Content-Security-Policy","value":"default-src 'self'; script-src 'self' https://www.gstatic.com https://www.google.com https://www.recaptcha.net; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http://127.0.0.1:* http://localhost:* https://*.googleusercontent.com; media-src 'self' blob: http://127.0.0.1:* http://localhost:*; connect-src 'self' https://*.googleapis.com https://*.firebaseio.com https://*.firebaseapp.com https://www.gstatic.com https://www.google.com https://www.recaptcha.net http://127.0.0.1:* http://localhost:*; frame-src https://*.firebaseapp.com https://accounts.google.com https://www.google.com https://www.recaptcha.net; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"}
+      ]},
+      {"source":"firebase-config.json","headers":[{"key":"Cache-Control","value":"no-store"}]}
+    ]
+  },
+  "firestore": {"rules":"firebase/firestore.rules","indexes":"firebase/firestore.indexes.json"},
+  "emulators": {"firestore":{"host":"127.0.0.1","port":8080},"ui":{"enabled":false},"singleProjectMode":true}
+}

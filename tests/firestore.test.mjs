@@ -1,0 +1,10 @@
+import test,{before,after} from 'node:test';import {readFile} from 'node:fs/promises';
+import {initializeTestEnvironment,assertSucceeds,assertFails} from '@firebase/rules-unit-testing';
+import {doc,setDoc,getDoc,serverTimestamp} from 'firebase/firestore';let env;
+before(async()=>{env=await initializeTestEnvironment({projectId:'demo-norn',firestore:{rules:await readFile('firebase/firestore.rules','utf8'),host:'127.0.0.1',port:8080}})});after(async()=>{await env?.cleanup()});
+const project=()=>({schema_version:2,title:'샘플',description:'설명',activeVariant:'short',frames:5,targetDuration:30,revision:1,updatedAt:serverTimestamp(),variantIds:['short']});
+test('owner can write and read own project',async()=>{const db=env.authenticatedContext('alice').firestore();await assertSucceeds(setDoc(doc(db,'users/alice/projects/one'),project()));await assertSucceeds(getDoc(doc(db,'users/alice/projects/one')))});
+test('guest and other owner cannot write',async()=>{for(const db of [env.unauthenticatedContext().firestore(),env.authenticatedContext('bob').firestore()])await assertFails(setDoc(doc(db,'users/alice/projects/two'),project()))});
+test('cross-user reads denied',async()=>{await assertFails(getDoc(doc(env.authenticatedContext('bob').firestore(),'users/alice/projects/one')))});
+test('unexpected root fields and invalid frame count denied',async()=>{const db=env.authenticatedContext('alice').firestore();await assertFails(setDoc(doc(db,'users/alice/projects/bad'),{...project(),localPath:'/private/a'}));await assertFails(setDoc(doc(db,'users/alice/projects/bad'),{...project(),frames:500}))});
+test('variant and settings owner isolation',async()=>{const db=env.authenticatedContext('alice').firestore();await assertSucceeds(setDoc(doc(db,'users/alice/projects/one/variants/short'),{schema_version:2,id:'short',name:'숏폼',settings:{},audio:{},scenes:[]}));await assertFails(getDoc(doc(env.authenticatedContext('bob').firestore(),'users/alice/projects/one/variants/short')));await assertSucceeds(setDoc(doc(db,'users/alice/settings/defaults'),{frames:5,theme:'warm',updatedAt:serverTimestamp()}))});

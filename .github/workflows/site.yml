@@ -1,0 +1,64 @@
+name: NORN checks and Pages preview
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: norn-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-nanum
+      - run: python -m pip install -r requirements.txt
+      - run: node --test tests/domain.test.mjs
+      - run: python -m unittest discover -s tests -p test_engine.py -v
+      - run: node scripts/build.mjs
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+      - name: Package local engine and website (source only)
+        run: git archive --format=zip HEAD -o norn-source.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: norn-source
+          path: norn-source.zip
+  firestore-rules:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - run: npm install --ignore-scripts
+      - run: npm run test:rules
+  deploy-pages:
+    needs: [check, firestore-rules]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true
+      - uses: actions/deploy-pages@v4
+        id: deployment

@@ -1,0 +1,6 @@
+{
+  "enabled": false,
+  "firebase": null,
+  "appCheckSiteKey": "",
+  "note": "운영 Firebase 프로젝트의 공개 웹 SDK 설정만 입력하세요. 관리자 키·개인키·로그인 토큰을 넣지 마세요."
+}

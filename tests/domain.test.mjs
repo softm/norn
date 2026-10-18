@@ -1,0 +1,9 @@
+import test from 'node:test';import assert from 'node:assert/strict';
+import * as d from '../public/domain.js';
+test('hour -> 30 seconds is 120x, not a first-30s trim',()=>{const r=d.timing({},0,3600,120);assert.equal(r.duration,30);assert.equal(r.source_duration,3600)});
+test('manual and intentionally cleared captions survive AI proposal',()=>{const p=d.demoProject(),s=p.variants[0].scenes[0];s.caption='';s.field_locks=['caption'];const q=d.applyProposal(p,{scenes:[{source_id:s.source_id,name:'변경',title:'낙지',caption:'자동'}]});assert.equal(q.variants[0].scenes[0].caption,'');assert.equal(q.variants[0].scenes[0].title,'낙지');assert.notEqual(p.variants[0].scenes[0].title,'낙지')});
+test('cloud payload excludes raw media, paths and credentials',()=>{const p=d.demoProject();p.token='secret';p.source='/Users/private';p.variants[0].scenes[0].filePath='/Users/private/a.jpg';p.variants[0].scenes[0].blob='data:SECRET';const json=JSON.stringify(d.cloudProject(p));for(const forbidden of ['secret','/Users/','data:SECRET','filePath'])assert.ok(!json.includes(forbidden))});
+test('variants deep-copy edits and IDs',()=>{const p=d.demoProject(),a=p.variants[0],b=d.variantCopy(a,'long');b.scenes[0].title='다르게';assert.notEqual(a.scenes[0].title,b.scenes[0].title);assert.notEqual(a.scenes[0].id,b.scenes[0].id)});
+test('overlap length is reflected',()=>{const p=d.demoProject(),v=p.variants[0];v.scenes[0].transition='fade';v.scenes[0].transition_duration=.5;assert.equal(d.duration(v),8.5)});
+test('invalid or subframe speed rejected',()=>{for(const args of [[0,1,0],[2,1,1],[0,.01,3600],[0,1,Infinity]])assert.throws(()=>d.timing({},...args))});
+test('same source and selected span retained on speed change',()=>{const r=d.timing({source_id:'a'},10,18,8);assert.equal(r.source_id,'a');assert.equal(r.start,10);assert.equal(r.duration,1)});
