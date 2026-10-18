@@ -4,13 +4,14 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test tests/domain.test.mjs tests/firebase-config.test.mjs tests/workspace.test.mjs",
+    "test": "node --test tests/domain.test.mjs tests/firebase-config.test.mjs tests/workspace.test.mjs tests/root-routing.test.mjs",
     "build": "node scripts/build.mjs",
     "serve": "python3 -m http.server 5173 --directory public",
     "test:rules": "firebase emulators:exec --only firestore --project demo-norn 'node --test tests/firestore.test.mjs tests/cloud-store.test.mjs'",
     "setup:firebase": "node scripts/setup-firebase.mjs",
     "test:engine": "python3 -m unittest discover -s tests -p \"test_*.py\" -v",
-    "diagnose": "python3 engine/main.py --diagnose"
+    "diagnose": "python3 engine/main.py --diagnose",
+    "sync:root": "node scripts/sync-root-entry.mjs"
   },
   "devDependencies": {
     "firebase": "13.0.0",
