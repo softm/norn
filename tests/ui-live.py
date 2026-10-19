@@ -20,6 +20,8 @@ with tempfile.TemporaryDirectory() as temp:
  try:
   with sync_playwright() as pw:
    b=pw.chromium.launch(headless=True,**({'executable_path':os.environ['NORN_CHROMIUM']} if os.environ.get('NORN_CHROMIUM') else {}));page=b.new_page(viewport={'width':1440,'height':1000});page.on('pageerror',lambda e:errors.append(str(e)));page.on('dialog',lambda d:d.accept())
+   # Test the unconfigured-login branch deliberately; never use production OAuth in CI.
+   page.route('**/firebase-config.json',lambda route:route.fulfill(status=200,content_type='application/json',body=json.dumps({'enabled':False,'firebase':None,'appCheckSiteKey':''})))
    page.goto(server.origin,wait_until='networkidle');page.screenshot(path=str(out/'home.png'),full_page=True);checks.append('homepage loads from actual Python HTTP server')
    page.locator('[data-action=account]').first.click();page.locator('[data-action=login]').click();page.wait_for_selector('.error-box');assert 'Firebase' in page.locator('.error-box').inner_text();page.locator('[data-action=guest]').click();assert page.locator('.clip').count()==3;checks.append('unconfigured Google login fails honestly; explicit local trial works')
    page.goto('about:blank')
@@ -48,4 +50,4 @@ with tempfile.TemporaryDirectory() as temp:
  finally:
   (out/'partial-checks.json').write_text(json.dumps({'checks':checks,'count':len(checks),'pageErrors':errors},ensure_ascii=False,indent=2))
   server.shutdown();server.server_close()
-(out/'result.json').write_text(json.dumps({'checks':checks,'count':len(checks),'pageErrors':errors,'scope':'real browser + loopback FFmpeg; live Google OAuth and Ollama not tested'},ensure_ascii=False,indent=2));print(json.dumps(checks,ensure_ascii=False,indent=2))
+(out/'result.json').write_text(json.dumps({'checks':checks,'count':len(checks),'pageErrors':errors,'scope':'real browser + loopback FFmpeg; Firebase config disabled by a test-only route; live Google OAuth and Ollama not tested'},ensure_ascii=False,indent=2));print(json.dumps(checks,ensure_ascii=False,indent=2))

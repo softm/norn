@@ -1,6 +1,13 @@
 {
-  "enabled": false,
-  "firebase": null,
+  "enabled": true,
+  "firebase": {
+    "apiKey": "AIzaSyBTtNOmMi4RVLbLKeCNMMhKr53AAX0ZnoM",
+    "authDomain": "norn-2cb91.firebaseapp.com",
+    "projectId": "norn-2cb91",
+    "storageBucket": "norn-2cb91.firebasestorage.app",
+    "messagingSenderId": "924703480384",
+    "appId": "1:924703480384:web:a689af74160c6903d19da5"
+  },
   "appCheckSiteKey": "",
-  "note": "운영 Firebase 프로젝트의 공개 웹 SDK 설정만 입력하세요. 관리자 키·개인키·로그인 토큰을 넣지 마세요."
+  "note": "NORN 전용 Firebase 웹 앱의 공개 설정입니다. 원본 미디어는 로컬에서 처리하며 계정에는 편집 정보만 저장합니다."
 }
