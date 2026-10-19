@@ -1,0 +1,53 @@
+name: NORN browser-only verification
+on:
+  push:
+    branches: [feat/browser-first-studio]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: norn-browser-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  browser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Download fixed browser runtimes (no user media)
+        run: |
+          mkdir -p /tmp/norn-vendor
+          npm install --prefix /tmp/norn-vendor --ignore-scripts --no-audit --no-fund mediabunny@1.51.0 @ffmpeg/core@0.12.10
+          mkdir -p public/vendor
+          cp /tmp/norn-vendor/node_modules/mediabunny/dist/bundles/mediabunny.mjs public/vendor/mediabunny.mjs
+          cp /tmp/norn-vendor/node_modules/mediabunny/LICENSE public/vendor/MEDIABUNNY-LICENSE.txt
+          cp /tmp/norn-vendor/node_modules/@ffmpeg/core/dist/esm/ffmpeg-core.* public/vendor/
+          sha256sum public/vendor/* > public/vendor/SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: browser-runtimes
+          path: public/vendor/
+      - name: Test browser studio
+        if: hashFiles('tests/browser-studio.py') != ''
+        run: |
+          sudo apt-get update && sudo apt-get install -y ffmpeg fonts-nanum
+          python -m pip install Pillow playwright
+          python -m playwright install --with-deps chromium
+          node --test tests/browser.test.mjs
+          python tests/browser-studio.py browser-results
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: browser-verification
+          path: browser-results
+      - name: Package source
+        run: git archive --format=zip HEAD -o norn-browser-source.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: norn-browser-source
+          path: norn-browser-source.zip
