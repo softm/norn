@@ -40,7 +40,12 @@ with tempfile.TemporaryDirectory() as temp:
    while time.time()<deadline and (app.job.get('id')==oldjob or app.job.get('status')=='running'):page.wait_for_timeout(100)
    assert app.job.get('status')=='done',app.job
    page.wait_for_function("document.querySelector('.progress-rail [data-action=result]') != null",timeout=60000);page.locator('.progress-rail [data-action=result]').click();page.wait_for_selector('.modal video');checks.append('final native encoding verified and playable output offered')
-   page.locator('[data-action=close]').click();page.locator('[data-action=posting]').first.click();page.locator('#public-note').fill('공개 소개');page.locator('#post-text').fill('직접 작성한 SNS 문구');page.locator('[data-action=channel][data-channel=x]').click();page.locator('#post-text').fill('X 전용 문구');page.locator('[data-action=posting-save]').click();page.wait_for_timeout(500);assert (app.store.root/'sns/short/x/post.txt').read_text()=='X 전용 문구';checks.append('editable per-channel copy saved to actual text files')
+   page.locator('[data-action=close]').click();page.locator('[data-action=posting]').first.click();page.locator('#public-note').fill('공개 소개');page.locator('#post-text').fill('직접 작성한 SNS 문구');page.locator('[data-action=channel][data-channel=x]').click();page.locator('#post-text').fill('X 전용 문구')
+   # The server responds only after every posting file is written; wait for that completion.
+   with page.expect_response(lambda r:r.url==server.origin+'/api/posting-save' and r.request.method=='POST',timeout=30000) as posting_saved:
+    page.locator('[data-action=posting-save]').click()
+   saved_response=posting_saved.value;saved_result=saved_response.json();assert saved_response.status==200,saved_result
+   assert (app.store.root/'sns/short/x/post.txt').read_text()=='X 전용 문구';checks.append('editable per-channel copy saved to actual text files')
    with page.expect_download() as d:page.locator('[data-action=export-posting]').click()
    assert d.value.suggested_filename.endswith('.zip');checks.append('text-only SNS bundle is downloadable')
    page.locator('[data-action=close]').click();page.screenshot(path=str(out/'studio.png'),full_page=True)
