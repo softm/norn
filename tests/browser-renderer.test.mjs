@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   BROWSER_RENDER_LIMITS, BROWSER_TRANSITIONS, BROWSER_STYLES, BrowserRenderError,
   browserFormat, getBrowserRenderSupport, validateBrowserRender, sampleBrowserTimeline,
-  createBrowserFramePacer, primeBrowserPlayback, validateBrowserPlayback,
+  createBrowserFramePacer, createBrowserFrameScheduler, primeBrowserPlayback, validateBrowserPlayback,
 } from '../public/browser-renderer.js';
 
 const support = { supported: true, mimeType: 'video/mp4', audioSupported: true };
@@ -15,7 +15,7 @@ const checkError = code => error => error instanceof BrowserRenderError && error
 const environment = canRecord => ({
   MediaRecorder: class { static isTypeSupported = canRecord; },
   HTMLCanvasElement: class { captureStream() {} }, MediaStream: class {},
-  requestAnimationFrame() {}, AudioContext: class {},
+  setTimeout() {}, clearTimeout() {}, AudioContext: class {},
 });
 
 test('browser support never confuses Node or a partial environment with working export', () => {
@@ -23,6 +23,15 @@ test('browser support never confuses Node or a partial environment with working 
   const env = environment(() => true); delete env.HTMLCanvasElement;
   assert.equal(getBrowserRenderSupport(env).supported, false);
   assert.match(getBrowserRenderSupport(env).reason, /화면 합성/);
+});
+
+test('recording support depends on timer scheduling rather than animation callbacks', () => {
+  const env = environment(() => true);
+  assert.equal('requestAnimationFrame' in env, false);
+  assert.equal(getBrowserRenderSupport(env).supported, true);
+  delete env.clearTimeout;
+  assert.equal(getBrowserRenderSupport(env).supported, false);
+  assert.match(getBrowserRenderSupport(env).reason, /영상 타이머/);
 });
 
 test('native MP4 is preferred, while supported WebM stays labelled and named WebM', () => {
@@ -207,6 +216,76 @@ test('high-refresh animation ticks composite only once per output frame, while s
     assert.equal(error.details.frameIntervalMs, 501); assert.equal(error.details.maxFrameIntervalMs, 500);
     assert.equal(error.details.fps, 24); assert.equal(error.details.visibilityState, 'visible');
     assert.match(error.message, /480p/); return true;
+  });
+});
+
+function timerClock() {
+  let time = 0; let sequence = 0; const timers = new Map(); const cleared = [];
+  return {
+    now: () => time,
+    setTimer(callback, delay) { const id = ++sequence; timers.set(id, { callback, delay, at: time + delay }); return id; },
+    clearTimer(id) { cleared.push(id); timers.delete(id); },
+    setTime(value) { time = value; },
+    pending: () => [...timers.values()],
+    cleared,
+    fire(at) {
+      assert.equal(timers.size, 1);
+      const [id, timer] = timers.entries().next().value; timers.delete(id);
+      time = at ?? timer.at; timer.callback();
+    },
+  };
+}
+
+test('frame deadlines compensate drawing time instead of adding a full frame delay after every draw', async () => {
+  const clock = timerClock(); const scheduler = createBrowserFrameScheduler(30, 0, clock);
+  const signal = new AbortController().signal;
+  clock.setTime(8); // The initial composite used 8 ms of the first 33.33 ms interval.
+  const first = scheduler.wait(signal);
+  assert.equal(clock.pending()[0].delay, 26); clock.fire(); assert.equal(await first, 34);
+  clock.setTime(42); // Another 8 ms of drawing must not move the next 66.67 ms deadline.
+  const second = scheduler.wait(signal);
+  assert.equal(clock.pending()[0].delay, 25); clock.fire(); assert.equal(await second, 67);
+  assert.equal(clock.pending().length, 0);
+});
+
+test('late callbacks skip expired deadlines and overdue rendering always yields one timer task', async () => {
+  const clock = timerClock(); const scheduler = createBrowserFrameScheduler(30, 0, clock);
+  const signal = new AbortController().signal;
+  const first = scheduler.wait(signal); clock.fire(145); assert.equal(await first, 145);
+  clock.setTime(150);
+  const next = scheduler.wait(signal);
+  assert.equal(clock.pending().length, 1); assert.equal(clock.pending()[0].delay, 17);
+  clock.fire(); assert.equal(await next, 167);
+  clock.setTime(225); // Drawing passed the 200 ms deadline; yield without a zero-delay loop.
+  const overdue = scheduler.wait(signal);
+  assert.equal(clock.pending().length, 1); assert.equal(clock.pending()[0].delay, 1);
+  clock.fire(); assert.equal(await overdue, 226);
+  assert.equal(clock.pending().length, 0);
+});
+
+test('aborting a scheduled frame clears its timer and preserves the abort reason', async () => {
+  const clock = timerClock(); const scheduler = createBrowserFrameScheduler(30, 0, clock);
+  const controller = new AbortController();
+  const pending = scheduler.wait(controller.signal);
+  const staleCallback = clock.pending()[0].callback;
+  const reason = new DOMException('cancelled while waiting', 'AbortError'); controller.abort(reason);
+  await assert.rejects(pending, error => error === reason);
+  assert.equal(clock.pending().length, 0); assert.equal(clock.cleared.length, 1);
+  staleCallback(); // A callback already queued when cancellation occurs must be inert.
+  assert.equal(clock.pending().length, 0);
+  await assert.rejects(scheduler.wait(controller.signal), error => error === reason);
+  assert.equal(clock.pending().length, 0);
+});
+
+test('timer scheduling never conceals an actual blocked event loop from the 500 ms frame guard', async () => {
+  const clock = timerClock(); const scheduler = createBrowserFrameScheduler(30, 0, clock);
+  const pacer = createBrowserFramePacer(30, 0); pacer.tick(0);
+  const pending = scheduler.wait(new AbortController().signal);
+  clock.fire(1016.8); const actual = await pending;
+  assert.equal(actual, 1016.8); // Report real time, never the requested 33.33 ms deadline.
+  assert.throws(() => pacer.tick(actual, { visibilityState: 'visible' }), error => {
+    assert.equal(error.code, 'FRAME_STALL'); assert.equal(error.details.frameIntervalMs, 1016.8);
+    assert.equal(error.details.maxFrameIntervalMs, 500); return true;
   });
 });
 
