@@ -12,7 +12,7 @@ async function load(){if(ff)return;update('브라우저 영상 엔진 준비 · 
  ff.FS.mkdir('/work');ff.FS.mkdir('/sources');
 }
 function run(args,expected){stage.expected=expected;log=[];ff.setTimeout(-1);ff.exec('-v','warning',...args);const code=ff.ret;ff.reset();if(code!==0)throw Error(`영상 처리 실패 (${code})\n${log.slice(-10).join('\n')}`);}
-function probe(path){log=[];ff.ffprobe('-v','error','-show_streams','-show_format','-of','json','-o','/work/probe.json',path);const code=ff.ret;ff.reset();if(code!==0)throw Error('영상 메타데이터 확인 실패');const value=JSON.parse(ff.FS.readFile('/work/probe.json',{encoding:'utf8'}));ff.FS.unlink('/work/probe.json');return value;}
+function probe(path){log=[];ff.setTimeout(-1);ff.ffprobe('-v','error','-show_streams','-show_format','-of','json','-o','/work/probe.json',path);const code=ff.ret;ff.reset();if(code!==0)throw Error(`영상 메타데이터 확인 실패 (${code}, ${path})\n${log.slice(-20).join('\n')}`);const value=JSON.parse(ff.FS.readFile('/work/probe.json',{encoding:'utf8'}));ff.FS.unlink('/work/probe.json');return value;}
 function tempo(speed){const out=[];while(speed>2.000001){out.push('atempo=2');speed/=2;}while(speed<.499999){out.push('atempo=0.5');speed*=2;}out.push('atempo='+speed.toFixed(8));return out.join(',');}
 const enc=['-c:v','libx264','-preset','ultrafast','-crf','24','-pix_fmt','yuv420p','-c:a','aac','-b:a','128k','-ar','44100','-ac','2','-threads','1','-movflags','+faststart'];
 function memoryCheck(limit){const bytes=ff.FS.readdir('/work').filter(n=>!['.','..'].includes(n)).reduce((sum,n)=>sum+ff.FS.stat('/work/'+n).size,0);if(bytes>limit)throw Error('브라우저 작업 메모리 안전 한도에 도달했습니다. 해상도·장면 수·완성 길이를 줄여주세요.');}
@@ -34,7 +34,7 @@ async function render({plan,inputs,overlays,join,workLimit}){
    let visual=photo?`scale=${w}:${h}`:`setpts=(PTS-STARTPTS)/${s.playback_speed},fps=${fps},scale=${w}:${h}:force_original_aspect_ratio=decrease,pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2:color=0x10120f`;
    if(photo&&s.motion==='zoom')visual+=`,zoompan=z='min(1.06,1+on*${.06/Math.max(1,s.frames-1)})':x='iw/2-iw/zoom/2':y='ih/2-ih/zoom/2':d=1:s=${w}x${h}:fps=${fps}`;
    visual+=`,setsar=1,format=yuv420p,settb=AVTB,trim=duration=${s.duration},setpts=PTS-STARTPTS`;
-   const graph=`[0:v]${visual}[base];[1:v]format=rgba,fade=t=in:st=0:d=${Math.min(.16,s.duration/4)}:alpha=1[text];[base][text]overlay=shortest=1:format=auto,format=yuv420p[v];`+(keep?`[0:a]asetpts=PTS-STARTPTS,${tempo(s.playback_speed)},volume=${Math.max(0,Math.min(2,Number(plan.audio.original_volume)||1))},aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,apad,atrim=duration=${s.duration}[a]`:`[2:a]atrim=duration=${s.duration},asetpts=PTS-STARTPTS[a]`);
+   const graph=`[0:v]${visual}[base];[1:v]format=rgba,fade=t=in:st=0:d=${Math.min(.16,s.duration/4)}:alpha=1[text];[base][text]overlay=shortest=1:format=auto,format=yuv420p[v];`+(keep?`[0:a]asetpts=PTS-STARTPTS,${tempo(s.playback_speed)},volume=${Math.max(0,Math.min(2,Number(plan.audio.original_volume??1)))},aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,apad,atrim=duration=${s.duration}[a]`:`[2:a]atrim=duration=${s.duration},asetpts=PTS-STARTPTS[a]`);
    args.push('-filter_complex_threads','1','-filter_complex',graph,'-map','[v]','-map','[a]','-r',String(fps),'-t',String(s.duration),...enc,output);run(args,s.duration);ff.FS.unlink(overlay);memoryCheck(workLimit);
   }
   stage={phase:'transitions',scene:plan.scenes.length,total:plan.scenes.length};update('장면·전환·원음 연결');const segments=plan.scenes.map((_,i)=>'/work/seg'+i+'.mp4');let joined='/work/joined.mp4';
