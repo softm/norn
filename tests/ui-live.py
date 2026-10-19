@@ -23,7 +23,7 @@ with tempfile.TemporaryDirectory() as temp:
    # Test the unconfigured-login branch deliberately; never use production OAuth in CI.
    page.route('**/firebase-config.json',lambda route:route.fulfill(status=200,content_type='application/json',body=json.dumps({'enabled':False,'firebase':None,'appCheckSiteKey':''})))
    page.goto(server.origin,wait_until='networkidle');page.screenshot(path=str(out/'home.png'),full_page=True);checks.append('homepage loads from actual Python HTTP server')
-   page.locator('[data-action=account]').first.click();page.locator('[data-action=login]').click();page.wait_for_selector('.error-box');assert 'Firebase' in page.locator('.error-box').inner_text();page.locator('[data-action=guest]').click();assert page.locator('.clip').count()==3;checks.append('unconfigured Google login fails honestly; explicit local trial works')
+   page.locator('[data-action=account]').first.click();page.locator('[data-action=login]').click();page.wait_for_selector('.error-box');assert 'Firebase' in page.locator('.error-box').inner_text();page.locator('[data-action=guest]').click();assert page.locator('.clip').count()==0;checks.append('unconfigured Google login fails honestly; browser editor starts without login')
    page.goto('about:blank')
    page.goto(server.origin+'/#connect='+urllib.parse.quote(server.origin+'|'+app.token),wait_until='networkidle');page.wait_for_selector('#workflow-nav');assert page.locator('.clip').count()==2;checks.append('authenticated browser-engine pairing loads actual folder')
    page.locator('#library-search').fill('영상');assert page.locator('.asset:visible').count()==1;page.locator('#library-search').fill('');checks.append('resource name filtering')

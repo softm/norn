@@ -1,7 +1,7 @@
 name: NORN checks and Pages preview
 on:
   push:
-    branches: [main]
+    branches: [main, browser-local-workflow-20261019]
   workflow_dispatch:
 permissions:
   contents: read
@@ -29,6 +29,7 @@ jobs:
         run: |
           node scripts/build.mjs
           python tests/ui-root.py ui-results/root
+          python tests/ui-browser.py ui-results/browser
           python tests/ui-live.py ui-results
       - uses: actions/upload-artifact@v4
         if: always()

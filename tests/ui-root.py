@@ -34,7 +34,7 @@ try:
    page.goto(base+path,wait_until='networkidle',timeout=15000)
    page.locator('.hero h1').wait_for(timeout=5000)
    assert page.url==base+path,page.url
-   page.locator('[data-action=enter]').last.click()
+   page.locator('[data-action=demo]').click()
    page.locator('.studio').wait_for();assert page.url==base+path+'#studio',page.url
    page.locator('#scene-title').fill('루트 편집 테스트')
    assert page.locator('#scene-title').input_value()=='루트 편집 테스트'
