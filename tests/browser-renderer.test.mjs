@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   BROWSER_RENDER_LIMITS, BROWSER_TRANSITIONS, BROWSER_STYLES, BrowserRenderError,
   browserFormat, getBrowserRenderSupport, validateBrowserRender, sampleBrowserTimeline,
+  createBrowserFramePacer, primeBrowserPlayback, validateBrowserPlayback,
 } from '../public/browser-renderer.js';
 
 const support = { supported: true, mimeType: 'video/mp4', audioSupported: true };
@@ -190,4 +191,100 @@ test('malformed numeric settings cannot become NaN progress or a stalled encoder
   }
   assert.throws(() => validateBrowserRender(variant([scene('a')], { settings: { width: 1279, height: 720, fps: 30 } }), [source('a')], options), checkError('INVALID_SIZE'));
   assert.throws(() => validateBrowserRender(variant([scene('a')], { settings: { width: 1280, height: 720, fps: 29.97 } }), [source('a')], options), checkError('INVALID_FPS'));
+});
+
+test('high-refresh animation ticks composite only once per output frame, while stalls still fail', () => {
+  const pacer = createBrowserFramePacer(30, 0); const drawn = [];
+  for (let i = 0; i < 120; i++) {
+    const tick = pacer.tick(i * 1000 / 120);
+    if (tick.draw) drawn.push(tick.frame);
+  }
+  assert.deepEqual(drawn, Array.from({ length: 30 }, (_, index) => index));
+  const guarded = createBrowserFramePacer(24, 0);
+  guarded.tick(0); guarded.tick(499);
+  assert.throws(() => guarded.tick(1000, { elapsedSeconds: 1, mimeType: 'video/webm', visibilityState: 'visible' }), error => {
+    assert.equal(error.code, 'FRAME_STALL');
+    assert.equal(error.details.frameIntervalMs, 501); assert.equal(error.details.maxFrameIntervalMs, 500);
+    assert.equal(error.details.fps, 24); assert.equal(error.details.visibilityState, 'visible');
+    assert.match(error.message, /480p/); return true;
+  });
+});
+
+const playback = (patch = {}) => ({
+  scene: 2, playState: 'playing', playElapsedMs: 500, localTime: .5, duration: 2.5,
+  currentTime: 5.5, expectedTime: 5.5, driftSeconds: 0, speed: 1,
+  paused: false, readyState: 4, ended: false, ...patch,
+});
+
+test('a pending native start is distinguished from a running decoder drift without extending either budget', () => {
+  const pending = playback({ playState: 'pending', playElapsedMs: 12, localTime: .4, currentTime: 5, expectedTime: 5.4, driftSeconds: .4, paused: true });
+  assert.doesNotThrow(() => validateBrowserPlayback(pending));
+  assert.throws(() => validateBrowserPlayback({ ...pending, playElapsedMs: 351 }), error => {
+    assert.equal(error.code, 'PLAYBACK_START_DELAY'); assert.equal(error.details.maxPlayStartMs, 350);
+    assert.equal(error.details.currentTime, 5); assert.equal(error.details.expectedTime, 5.4);
+    assert.equal(error.details.playState, 'pending'); return true;
+  });
+  // Starting late does not erase the already-observed media/timeline offset.
+  assert.throws(() => validateBrowserPlayback({ ...pending, playState: 'playing', paused: false }), error => {
+    assert.equal(error.code, 'VIDEO_DESYNC'); assert.equal(error.details.driftSeconds, .4);
+    assert.equal(error.details.maxDriftSeconds, .35); return true;
+  });
+});
+
+test('a final or outgoing short clip cannot complete with its native playback still pending', () => {
+  const short = playback({ playState: 'pending', playElapsedMs: 95, localTime: .1, duration: .1, currentTime: 0, expectedTime: .1, driftSeconds: .1, paused: true });
+  assert.doesNotThrow(() => validateBrowserPlayback(short));
+  assert.throws(() => validateBrowserPlayback(short, { requireStarted: true }), checkError('PLAYBACK_START_DELAY'));
+  assert.throws(() => validateBrowserPlayback(playback({ ended: true, localTime: .5, duration: 2.5 })), checkError('SOURCE_ENDED'));
+  assert.doesNotThrow(() => validateBrowserPlayback(playback({ driftSeconds: .35 })));
+  assert.throws(() => validateBrowserPlayback(playback({ driftSeconds: .351 })), checkError('VIDEO_DESYNC'));
+});
+
+class PrimingMedia extends EventTarget {
+  constructor() {
+    super(); this.duration = 20; this._time = 0; this.paused = true; this.muted = false;
+    this.readyState = 2; this.seeking = false; this.muteAtPlay = []; this.pauseCalls = 0;
+    this.playCalled = new Promise(resolve => { this.notifyPlay = resolve; });
+  }
+  get currentTime() { return this._time; }
+  set currentTime(value) {
+    this._time = value; this.seeking = true;
+    queueMicrotask(() => { this.seeking = false; this.dispatchEvent(new Event('seeked')); });
+  }
+  play() {
+    this.muteAtPlay.push(this.muted); this.notifyPlay();
+    return new Promise(resolve => { this.finishPlay = () => { this.paused = false; this._time += .2; resolve(); }; });
+  }
+  pause() { this.paused = true; this.pauseCalls++; }
+}
+
+test('native startup completes silently before readiness, then restores the exact source trim', async () => {
+  const media = new PrimingMedia(); const controller = new AbortController(); let ready = false;
+  const preparation = primeBrowserPlayback(media, { start: 5, signal: controller.signal }).then(result => { ready = true; return result; });
+  await media.playCalled;
+  assert.equal(ready, false); assert.equal(media.muted, true); assert.equal(media.currentTime, 5);
+  media.finishPlay(); const result = await preparation;
+  assert.equal(ready, true); assert.deepEqual(media.muteAtPlay, [true]);
+  assert.equal(media.currentTime, 5); assert.equal(media.paused, true); assert.equal(media.muted, false);
+  assert.ok(Number.isFinite(result.warmupMs) && result.warmupMs >= 0);
+});
+
+test('cancelled warmup stays silent and pauses again if a delayed native play resolves afterward', async () => {
+  const media = new PrimingMedia(); const controller = new AbortController();
+  const preparation = primeBrowserPlayback(media, { start: 2, signal: controller.signal });
+  await media.playCalled; controller.abort();
+  await assert.rejects(preparation, { name: 'AbortError' });
+  assert.equal(media.paused, true); assert.equal(media.muted, true);
+  const pauses = media.pauseCalls;
+  media.finishPlay(); await Promise.resolve(); await Promise.resolve();
+  assert.equal(media.paused, true); assert.equal(media.muted, false); assert.ok(media.pauseCalls > pauses);
+});
+
+test('blocked native warmup is reported before rendering and leaves playback paused', async () => {
+  const media = new PrimingMedia();
+  media.play = () => Promise.reject(new DOMException('not permitted', 'NotAllowedError'));
+  await assert.rejects(primeBrowserPlayback(media), error => {
+    assert.equal(error.code, 'PLAYBACK_BLOCKED'); assert.equal(error.details.phase, 'preparing'); return true;
+  });
+  assert.equal(media.paused, true); assert.equal(media.muted, false);
 });
