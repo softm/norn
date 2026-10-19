@@ -1,3 +1,645 @@
 .local-import-buttons{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin:0 0 14px}.local-import-buttons button{white-space:nowrap;padding:9px 6px}.local-drop-hint{grid-column:1/-1;border:1px dashed #626856;border-radius:14px;padding:26px 12px;text-align:center;color:var(--muted,#b8bbae);font-size:12px;line-height:1.9}.local-library-info{display:flex;flex-direction:column;gap:7px;margin-top:16px;color:var(--muted,#aaa);font-size:11px;line-height:1.8}.source-choices{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:20px 0}.advanced-tools{border-top:1px solid #34382e;margin-top:25px;padding-top:14px}.advanced-tools summary{color:var(--muted,#aaa);font-size:12px}.advanced-tools a{display:block;margin-top:15px}.export-facts{display:flex;flex-wrap:wrap;gap:12px 30px;border:1px solid #404438;border-radius:12px;padding:15px;margin:18px 0}.export-facts span{font-size:13px;color:#aeb4a1}.export-facts strong{color:#e4f0d4;margin-left:8px}.import-issues{list-style:none;padding:0;max-height:45vh;overflow:auto}.import-issues li{padding:11px 0;border-bottom:1px solid #34382e;display:flex;flex-direction:column;gap:4px;overflow-wrap:anywhere}.import-issues span{color:#b7bfaa;font-size:12px}.local-dragover::after{content:'사진·영상·폴더를 놓아주세요';position:fixed;inset:12px;z-index:200;background:#172016df;border:2px dashed #cfeda5;border-radius:22px;display:grid;place-items:center;color:#e5f4d2;font-size:clamp(20px,3vw,34px);pointer-events:none}.local-relink{margin:0;border-radius:0;display:flex;align-items:center;justify-content:center;gap:15px;padding:12px 18px}.hero-actions{flex-wrap:wrap}#browser-result-player{max-height:55vh;width:100%;background:#10130e}.studio button[hidden]{display:none!important}.modal .actions{flex-wrap:wrap}.modal video{max-height:55vh}.connection-banner{overflow-wrap:anywhere}@media(max-width:600px){.source-choices{grid-template-columns:1fr}.local-relink{display:block;font-size:12px}.local-relink button{margin-top:8px}.export-facts{gap:10px}.hero-actions button{flex:1;white-space:nowrap}.local-import-buttons{margin-top:8px}.local-drop-hint{padding:15px}.modal .actions>*{flex-grow:1}.studio .project-head .name{max-width:120px}.studio .project-head #connection-label{display:none}}
 
 #browser-error-details{white-space:pre-wrap;overflow-wrap:anywhere;max-height:40vh;overflow:auto;font-size:12px;line-height:1.6}
+
+/* Keep the everyday edit actions visible; group secondary settings below them. */
+.studio,
+.studio .workspace,
+.studio .timeline {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.studio #progress {
+  top: var(--studio-header-height, 64px);
+}
+
+.studio .progress-rail {
+  position: relative;
+  top: 0;
+}
+
+.local-import-buttons button {
+  min-height: 40px;
+  font-size: 12px;
+}
+
+.asset .add {
+  width: 32px;
+  height: 32px;
+  font-size: 20px;
+  line-height: 1;
+  background: #171b16ed;
+  border-color: #747a64;
+}
+
+.library-more {
+  margin-top: 16px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #1b1e18;
+}
+
+.library-more > summary,
+.variant-more > summary {
+  cursor: pointer;
+  min-height: 38px;
+  padding: 10px 2px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #d2d8c5;
+}
+
+.library-more > summary::marker,
+.variant-more > summary::marker,
+.inspector details > summary::marker {
+  color: var(--accent);
+}
+
+.library-more[open] {
+  padding-bottom: 8px;
+}
+
+.library-more[open] > summary {
+  margin-bottom: 7px;
+  border-bottom: 1px solid var(--line);
+}
+
+.library-more button {
+  width: 100%;
+  min-height: 36px;
+  text-align: left;
+  white-space: normal;
+}
+
+.library-more .local-library-info {
+  margin-top: 10px;
+}
+
+.variant-more {
+  position: relative;
+  flex: none;
+  min-width: 0;
+}
+
+.variant-more > summary {
+  padding: 8px 11px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #20251c;
+  white-space: nowrap;
+}
+
+.variant-more[open] {
+  z-index: 20;
+}
+
+.variant-more > .variant-tools {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 7px;
+  width: min(220px, calc(100vw - 32px));
+  padding: 10px;
+  border: 1px solid #505741;
+  border-radius: 11px;
+  background: #24271f;
+  box-shadow: 0 12px 32px #0006;
+}
+
+.variant-more:not([open]) > .variant-tools {
+  display: none;
+}
+
+.variant-more .variant-tools button {
+  min-height: 36px;
+  padding: 9px 11px;
+  text-align: left;
+  font-size: 12px;
+  white-space: normal;
+}
+
+.stage-toolbar > .row {
+  min-width: 0;
+}
+
+.variant-select {
+  max-width: min(260px, 100%);
+  min-height: 38px;
+}
+
+.transport {
+  flex-wrap: wrap;
+  gap: 9px;
+}
+
+.transport button {
+  min-width: 38px;
+  min-height: 38px;
+}
+
+.inspector .section-head h2 {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.inspector-basic {
+  min-width: 0;
+}
+
+.inspector-basic label {
+  line-height: 1.6;
+}
+
+.inspector-basic textarea {
+  min-height: 92px;
+}
+
+.inspector-basic .locknote {
+  line-height: 1.6;
+}
+
+.inspector details {
+  margin-top: 12px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #20241c;
+}
+
+.inspector details > summary {
+  min-height: 44px;
+  padding: 12px 0;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.inspector details[open] {
+  padding-bottom: 12px;
+}
+
+.inspector details[open] > summary {
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.inspector .row .narrow {
+  width: 72px;
+}
+
+/* Each scene has separate selection and deletion buttons, including on touch. */
+.timeline {
+  padding-top: 16px;
+}
+
+.timeline-head {
+  align-items: center;
+  gap: 10px 18px;
+  margin-bottom: 7px;
+}
+
+.timeline-head > strong {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 5px 10px;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.timeline-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.timeline-head > .timeline-actions {
+  margin-left: auto;
+}
+
+.timeline-actions button {
+  min-height: 36px;
+  padding: 8px 11px;
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.timeline-actions .danger {
+  border-color: #6e4c42;
+  background: #322720;
+}
+
+.timeline-help {
+  margin: 0 0 9px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.timeline-help kbd {
+  padding: 2px 5px;
+  border: 1px solid #545944;
+  border-radius: 4px;
+  background: #292e22;
+  color: #e4e9d8;
+  font: inherit;
+}
+
+.track {
+  max-width: 100%;
+  min-height: 111px;
+  gap: 10px;
+  padding: 5px 4px 14px;
+  border-radius: 10px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  scroll-padding-inline: 6px;
+  scrollbar-width: thin;
+  scrollbar-color: #71765e #20221c;
+  -webkit-overflow-scrolling: touch;
+}
+
+.track:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.timeline .clip {
+  min-width: 144px;
+  height: 90px;
+  padding: 0;
+  border-color: #484f3e;
+  border-radius: 10px;
+  background: #303829;
+}
+
+.timeline .clip.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px #e9b66630;
+}
+
+.clip-select {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  text-align: left;
+}
+
+.clip-select:hover {
+  background: #424a33;
+}
+
+.clip-select:active {
+  transform: none;
+}
+
+.clip-select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -3px;
+}
+
+.clip-select img {
+  inset: 0;
+  opacity: .4;
+  pointer-events: none;
+}
+
+.clip-select .clip-top {
+  top: 10px;
+  left: 10px;
+  right: 48px;
+  max-width: none;
+  font-size: 12px;
+  line-height: 1.5;
+  text-shadow: 0 1px 4px #000;
+}
+
+.clip-select .clip-bottom {
+  left: 10px;
+  bottom: 9px;
+  max-width: calc(100% - 56px);
+  overflow: hidden;
+  white-space: nowrap;
+  font-size: 11px;
+  line-height: 1.4;
+  text-shadow: 0 1px 4px #000;
+}
+
+.clip-select .clip-tag {
+  bottom: 8px;
+  right: 7px;
+}
+
+.clip-delete {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  min-width: 36px;
+  padding: 0;
+  border: 1px solid #6d725e;
+  border-radius: 8px;
+  background: #171b16ed;
+  color: #f2efdf;
+  font-size: 25px;
+  line-height: 1;
+  opacity: 1;
+}
+
+.clip-delete:hover {
+  border-color: #c88471;
+  background: #49322b;
+  color: #ffd1c7;
+}
+
+.clip-delete:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -3px;
+}
+
+.clip-add {
+  flex: 0 0 104px;
+  align-self: flex-start;
+  height: 90px;
+  padding: 12px;
+  border: 1px dashed #697153;
+  border-radius: 10px;
+  background: #282e22;
+  color: #dce7cb;
+  font-size: 12px;
+  line-height: 1.7;
+  white-space: normal;
+}
+
+.blank-clip {
+  min-width: 160px;
+  min-height: 90px;
+  padding: 14px;
+  line-height: 1.7;
+  text-align: center;
+}
+
+.library-more > summary:focus-visible,
+.variant-more > summary:focus-visible,
+.inspector details > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 5px;
+}
+
+/* An undo action stays next to the removal notice until the notice is closed. */
+#toast {
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  line-height: 1.6;
+}
+
+#toast > span {
+  flex: 1;
+  min-width: 0;
+}
+
+#toast button[data-action="undo"] {
+  flex: none;
+  min-height: 38px;
+  padding: 8px 13px;
+  border: 1px solid #465037;
+  border-radius: 8px;
+  background: #293820;
+  color: #f1f5e9;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+#toast button[data-action="undo"]:hover {
+  border-color: #354928;
+  background: #3d512f;
+}
+
+#toast button[data-action="undo"]:focus-visible {
+  outline: 2px solid #374d27;
+  outline-offset: 3px;
+}
+
+@media (max-width: 760px) {
+  .studio {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .studio .workspace {
+    display: contents;
+  }
+
+  .studio .library { order: 1; }
+  .studio .stage { order: 2; }
+  .studio .timeline { order: 3; }
+  .studio .inspector { order: 4; }
+
+  .studio .topbar {
+    height: auto;
+    min-height: 60px;
+    padding: 10px 12px;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .studio .topbar > .toolbar {
+    flex: 1;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    min-width: 0;
+    gap: 6px;
+  }
+
+  .studio .topbar button {
+    min-height: 40px;
+  }
+
+  .library {
+    max-height: none;
+    overflow: visible;
+    padding: 14px 12px;
+  }
+
+  .library-grid {
+    max-width: 100%;
+    padding-bottom: 6px;
+    overscroll-behavior-x: contain;
+    scrollbar-width: thin;
+  }
+
+  .asset {
+    min-width: 112px;
+    max-width: 132px;
+  }
+
+  .asset .view,
+  .asset img {
+    height: 74px;
+  }
+
+  .asset .duration {
+    top: 53px;
+  }
+
+  .asset .asset-name {
+    padding: 7px;
+    font-size: 11px;
+  }
+
+  .local-import-buttons {
+    margin-bottom: 10px;
+  }
+
+  .library-more {
+    margin-top: 10px;
+  }
+
+  .library-more button {
+    text-align: left;
+  }
+
+  .stage-toolbar {
+    align-items: center;
+    gap: 8px;
+  }
+
+  .stage-toolbar > .row {
+    flex: 1 1 180px;
+  }
+
+  .variant-select {
+    max-width: 100%;
+  }
+
+  .variant-more[open] {
+    flex-basis: 100%;
+  }
+
+  .variant-more > .variant-tools {
+    position: static;
+    width: 100%;
+    margin-top: 7px;
+    box-shadow: none;
+  }
+
+  .preview-area {
+    min-height: 220px;
+    height: min(42vh, 325px);
+  }
+
+  .transport {
+    gap: 6px;
+  }
+
+  .transport time {
+    padding: 5px 0;
+    font-size: 11px;
+  }
+
+  .timeline {
+    padding: 15px 12px 13px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .timeline-head {
+    align-items: flex-start;
+    gap: 9px;
+  }
+
+  .timeline-head > strong,
+  .timeline-head > .timeline-actions {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .timeline-actions {
+    gap: 6px;
+  }
+
+  .timeline-tools {
+    margin-left: 0;
+  }
+
+  .timeline-tools label {
+    font-size: 11px;
+  }
+
+  .timeline-help {
+    margin-top: 3px;
+    font-size: 11px;
+  }
+
+  .inspector {
+    border-top: 0;
+    padding: 18px 14px 26px;
+  }
+
+  .inspector h2 {
+    font-size: 14px;
+  }
+
+  .inspector details > summary {
+    font-size: 13px;
+  }
+}
+
+@media (pointer: coarse), (max-width: 760px) {
+  .timeline .clip,
+  .clip-add {
+    height: 98px;
+  }
+
+  .track {
+    min-height: 119px;
+  }
+
+  .clip-delete {
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+    top: 5px;
+    right: 5px;
+  }
+
+  .clip-select .clip-top {
+    right: 58px;
+  }
+
+  .timeline-actions button,
+  .transport button,
+  .local-import-buttons button,
+  .library-more button,
+  .library-more > summary,
+  .variant-more > summary,
+  .variant-more .variant-tools button,
+  #toast button[data-action="undo"] {
+    min-height: 44px;
+  }
+
+  .asset .add {
+    width: 44px;
+    height: 44px;
+  }
+}

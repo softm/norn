@@ -28,14 +28,14 @@ with tempfile.TemporaryDirectory() as temp:
    page.goto(server.origin+'/#connect='+urllib.parse.quote(server.origin+'|'+app.token),wait_until='networkidle');page.wait_for_selector('#workflow-nav');assert page.locator('.clip').count()==2;checks.append('authenticated browser-engine pairing loads actual folder')
    page.locator('#library-search').fill('영상');assert page.locator('.asset:visible').count()==1;page.locator('#library-search').fill('');checks.append('resource name filtering')
    page.locator('.asset .view').first.click();assert page.locator('.modal img').count()==1;page.locator('[data-action=view-next]').click();assert page.locator('.modal video').count()==1;page.locator('[data-action=close]').click();checks.append('original photo and video lightbox navigation')
-   page.locator('#scene-title').fill('노른 테스트');page.locator('#scene-caption').fill('직접 수정한 문구');page.locator('[data-bind=style]').select_option('editorial');page.wait_for_timeout(450);assert page.locator('#scene-title').input_value()=='노른 테스트';checks.append('scene title/caption editing with native overlay')
+   page.locator('#scene-title').fill('노른 테스트');page.locator('#scene-caption').fill('직접 수정한 문구');page.locator('.text-options > summary').click();page.locator('[data-bind=style]').select_option('editorial');page.wait_for_timeout(450);assert page.locator('#scene-title').input_value()=='노른 테스트';checks.append('scene title/caption editing with native overlay')
    page.locator('[data-action=duplicate]').click();assert page.locator('.clip').count()==3;page.locator('[data-action=delete]').click();assert page.locator('.clip').count()==2;checks.append('duplicate/delete without source deletion')
-   page.locator('.clip').last.click();page.wait_for_selector('#trimbar');page.locator('[data-action=speed][data-value="8"]').click();assert page.locator('[data-timing=speed]').input_value()=='8';checks.append('speed and visual trim controls')
+   page.locator('.clip-select').last.click();page.wait_for_selector('#trimbar');page.locator('[data-action=speed][data-value="8"]').click();assert page.locator('[data-timing=speed]').input_value()=='8';checks.append('speed and visual trim controls')
    # Use whole source at 8x, one second output.
    page.locator('[data-timing=start][type=number]').fill('0');page.locator('[data-timing=start][type=number]').press('Tab');page.locator('[data-timing=end][type=number]').fill('8');page.locator('[data-timing=end][type=number]').press('Tab');
    page.locator('[data-action=preview]').click();page.wait_for_function("document.querySelector('#player')?.src.includes('/output/')",timeout=60000);page.wait_for_function("document.querySelector('#player')?.readyState>=2",timeout=30000);assert page.evaluate('document.querySelector("#player").duration')<1.2;checks.append('8x preview is a real generated playable MP4')
-   page.locator('[data-action=original]').click();page.locator('[data-action=variant-settings]').click();page.locator('#variant-name').fill('완성본');page.locator('[data-action=variant-save]').click();checks.append('editable variant metadata')
-   oldjob=app.job.get('id');page.locator('[data-action=render]').click();
+   page.locator('[data-action=original]').click();page.locator('.variant-more > summary').click();page.locator('[data-action=variant-settings]').click();page.locator('#variant-name').fill('완성본');page.locator('[data-action=variant-save]').click();checks.append('editable variant metadata')
+   oldjob=app.job.get('id');page.locator('[data-action=render]').first.click();
    deadline=time.time()+60
    while time.time()<deadline and (app.job.get('id')==oldjob or app.job.get('status')=='running'):page.wait_for_timeout(100)
    assert app.job.get('status')=='done',app.job
@@ -49,7 +49,7 @@ with tempfile.TemporaryDirectory() as temp:
    with page.expect_download() as d:page.locator('[data-action=export-posting]').click()
    assert d.value.suggested_filename.endswith('.zip');checks.append('text-only SNS bundle is downloadable')
    page.locator('[data-action=close]').click();page.screenshot(path=str(out/'studio.png'),full_page=True)
-   page.set_viewport_size({'width':390,'height':844});page.wait_for_timeout(300);page.evaluate('scrollTo(0,650)');r=page.locator('#progress').bounding_box();assert r and 55<=r['y']<=65;assert page.evaluate('document.documentElement.scrollWidth')<=395;page.screenshot(path=str(out/'mobile.png'),full_page=True);checks.append('mobile layout and always-visible progress panel')
+   page.set_viewport_size({'width':390,'height':844});page.wait_for_timeout(300);page.evaluate('scrollTo(0,650)');r=page.locator('#progress').bounding_box();header=page.locator('.studio .topbar').bounding_box();assert r and header and abs(r['y']-(header['y']+header['height']))<=2;assert page.evaluate('document.documentElement.scrollWidth')<=395;page.screenshot(path=str(out/'mobile.png'),full_page=True);checks.append('mobile layout and always-visible progress panel')
    assert not errors,errors;b.close()
   assert {p.name:core.file_hash(p) for p in source.iterdir()}==original;checks.append('all original file hashes unchanged')
  finally:
