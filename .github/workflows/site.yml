@@ -23,19 +23,6 @@ jobs:
       - run: python -m pip install -r requirements.txt
       - run: npm test
       - run: python -m unittest discover -s tests -p 'test_*.py' -v
-      - run: python -m pip install playwright
-      - run: python -m playwright install --with-deps chromium
-      - name: Verify root routes and editor in a real browser
-        run: |
-          node scripts/build.mjs
-          python tests/ui-root.py ui-results/root
-          python tests/ui-browser.py ui-results/browser
-          python tests/ui-live.py ui-results
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: ui-verification
-          path: ui-results
       - run: node scripts/build.mjs
       - uses: actions/upload-pages-artifact@v3
         with:
@@ -46,6 +33,30 @@ jobs:
         with:
           name: norn-source
           path: norn-source.zip
+  browser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-nanum
+      - run: python -m pip install -r requirements.txt playwright
+      - run: python -m playwright install --with-deps chromium
+      - name: Verify root routes, browser-only export and the optional native engine
+        run: |
+          node scripts/build.mjs
+          python tests/ui-root.py ui-results/root
+          python tests/ui-browser.py ui-results/browser
+          python tests/ui-live.py ui-results
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ui-verification
+          path: ui-results
   firestore-rules:
     runs-on: ubuntu-latest
     steps:
@@ -66,7 +77,7 @@ jobs:
           name: dependency-audit
           path: npm-audit.json
   deploy-pages:
-    needs: [check, firestore-rules]
+    needs: [check, browser, firestore-rules]
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
