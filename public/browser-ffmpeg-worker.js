@@ -12,7 +12,16 @@ async function load(){if(ff)return;update('브라우저 영상 엔진 준비 · 
  ff.FS.mkdir('/work');ff.FS.mkdir('/sources');
 }
 function run(args,expected){stage.expected=expected;log=[];ff.setTimeout(-1);ff.exec('-v','warning',...args);const code=ff.ret;ff.reset();if(code!==0)throw Error(`영상 처리 실패 (${code})\n${log.slice(-10).join('\n')}`);}
-function probe(path){log=[];ff.setTimeout(-1);ff.ffprobe('-v','error','-show_streams','-show_format','-of','json','-o','/work/probe.json',path);const code=ff.ret;ff.reset();if(code!==0)throw Error(`영상 메타데이터 확인 실패 (${code}, ${path})\n${log.slice(-20).join('\n')}`);const value=JSON.parse(ff.FS.readFile('/work/probe.json',{encoding:'utf8'}));ff.FS.unlink('/work/probe.json');return value;}
+function probe(path){
+ // core 0.12.10 may leave ret=-1 on a successful ffprobe (#817).
+ // Require a fresh, structurally valid report; never substitute guessed metadata.
+ const output='/work/probe.json';try{ff.FS.unlink(output);}catch{}
+ log=[];ff.setTimeout(-1);ff.ffprobe('-v','error','-show_streams','-show_format','-of','json','-o',output,path);const code=ff.ret;ff.reset();
+ let value;try{value=JSON.parse(ff.FS.readFile(output,{encoding:'utf8'}));}catch{}
+ try{ff.FS.unlink(output);}catch{}
+ if(![0,-1].includes(code)||!value||value.error||!Array.isArray(value.streams)||!value.streams.length||!(Number(value.format?.duration)>0))throw Error(`영상 메타데이터 확인 실패 (${code})\n${log.slice(-20).join('\n')}`);
+ return value;
+}
 function tempo(speed){const out=[];while(speed>2.000001){out.push('atempo=2');speed/=2;}while(speed<.499999){out.push('atempo=0.5');speed*=2;}out.push('atempo='+speed.toFixed(8));return out.join(',');}
 const enc=['-c:v','libx264','-preset','ultrafast','-crf','24','-pix_fmt','yuv420p','-c:a','aac','-b:a','128k','-ar','44100','-ac','2','-threads','1','-movflags','+faststart'];
 function memoryCheck(limit){const bytes=ff.FS.readdir('/work').filter(n=>!['.','..'].includes(n)).reduce((sum,n)=>sum+ff.FS.stat('/work/'+n).size,0);if(bytes>limit)throw Error('브라우저 작업 메모리 안전 한도에 도달했습니다. 해상도·장면 수·완성 길이를 줄여주세요.');}
