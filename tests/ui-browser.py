@@ -160,6 +160,8 @@ def inspect_video(path, expected):
     assert ("mp4" in container) if path.suffix == ".mp4" else ("webm" in container), container
     video = next(stream for stream in probe["streams"] if stream["codec_type"] == "video")
     audio = next(stream for stream in probe["streams"] if stream["codec_type"] == "audio")
+    if path.suffix == ".mp4":
+        assert (video["codec_name"], audio["codec_name"]) == ("h264", "aac"), (video, audio)
     assert (video["width"], video["height"]) == (720, 1280), video
     # MediaRecorder WebM may omit a header duration; use actual packet timestamps.
     packet_end = max(float(packet.get("pts_time", 0)) + float(packet.get("duration_time", 0))

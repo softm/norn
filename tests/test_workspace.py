@@ -1,4 +1,4 @@
-import copy,json,sys,tempfile,threading,time,unittest,urllib.request,urllib.error,zipfile
+import copy,json,shutil,sys,tempfile,threading,time,unittest,urllib.request,urllib.error,zipfile
 from pathlib import Path
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'engine'))
@@ -46,7 +46,24 @@ class WorkspaceTests(unittest.TestCase):
  def test_04_render_and_artifact_metadata(self):
   self.req('/api/render',{'project':self.project()});self.wait();r=self.req('/api/artifacts')['artifacts']['short'];self.assertEqual(r['planned_frames'],36);self.assertAlmostEqual(r['planned_duration'],1.8,delta=.01);self.assertEqual(r['metadata']['width'],240)
  def test_05_preview_cache_reuses_real_render(self):
-  p=self.project();sid=p['variants'][0]['scenes'][1]['id'];self.req('/api/render',{'project':p,'preview':True,'sceneId':sid});self.wait();self.assertFalse(self.app.job['result']['cache_hit'])
+  p=self.project();sid=p['variants'][0]['scenes'][1]['id']
+  cleanup_entered=threading.Event();release_cleanup=threading.Event();remove=shutil.rmtree
+  def gated_cleanup(path,*args,**kwargs):
+   if Path(path).name.startswith('norn-render-'):
+    cleanup_entered.set()
+    if not release_cleanup.wait(10):raise TimeoutError('Final render cleanup gate timed out')
+   return remove(path,*args,**kwargs)
+  with patch('server.shutil.rmtree',side_effect=gated_cleanup):
+   self.req('/api/render',{'project':p,'preview':True,'sceneId':sid})
+   try:
+    self.assertTrue(cleanup_entered.wait(30),self.app.job)
+    self.assertEqual(self.app.state()['job']['status'],'running','Completion must wait for cleanup and cache publication')
+    with self.assertRaises(ValueError):self.app.start({'project':copy.deepcopy(self.app.project),'preview':True,'sceneId':sid},'render')
+   finally:release_cleanup.set()
+   self.wait()
+  self.assertFalse(self.app.job['result']['cache_hit'])
+  result=self.app.job['result'];cached=json.loads((self.app.store.root/f'.cache/previews/{result["fingerprint"]}.json').read_text())
+  self.assertEqual(cached['path'],result['path']);self.assertEqual(core.file_hash(self.app.store.root/result['path']),cached['sha256'])
   p=copy.deepcopy(self.app.project);self.req('/api/render',{'project':p,'preview':True,'sceneId':sid});self.wait();self.assertTrue(self.app.job['result']['cache_hit']);self.assertEqual(len(self.app.project['variants'][0]['scenes']),2)
  def test_06_caption_change_invalidates_preview_cache(self):
   p=copy.deepcopy(self.app.project);row=p['variants'][0]['scenes'][1];row['caption']='다른 자막';self.req('/api/render',{'project':p,'preview':True,'sceneId':row['id']});self.wait();self.assertFalse(self.app.job['result']['cache_hit'])

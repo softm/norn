@@ -23,8 +23,12 @@ const FONT_FAMILIES = Object.freeze({
   serif: '"Noto Serif KR", "AppleMyungjo", "Batang", Georgia, serif',
   rounded: 'ui-rounded, "Arial Rounded MT Bold", "Noto Sans KR", system-ui, sans-serif',
 });
+// A bare video/mp4 probe can select VP9/Opus in MP4 on Chromium. Request AVC/AAC
+// explicitly so an MP4 choice does not hide an unexpected codec combination.
 const RECORDING_TYPES = Object.freeze([
-  'video/mp4;codecs=avc1,mp4a.40.2', 'video/mp4',
+  'video/mp4;codecs=avc1.42E01E,mp4a.40.2',
+  'video/mp4;codecs=avc1.640028,mp4a.40.2',
+  'video/mp4;codecs=avc1,mp4a.40.2',
   'video/webm;codecs=vp8,opus', 'video/webm;codecs=vp9,opus', 'video/webm',
 ]);
 const BACKGROUND_MESSAGE = '영상 생성 중 다른 탭이나 앱으로 이동해 작업을 멈췄습니다. 노른 화면을 유지한 채 다시 생성하세요.';

@@ -25,12 +25,18 @@ test('browser support never confuses Node or a partial environment with working 
 });
 
 test('native MP4 is preferred, while supported WebM stays labelled and named WebM', () => {
-  const mp4 = getBrowserRenderSupport(environment(type => type === 'video/mp4' || type === 'video/webm'));
-  assert.equal(mp4.mimeType, 'video/mp4'); assert.equal(mp4.extension, 'mp4');
+  const mp4 = getBrowserRenderSupport(environment(type => type === 'video/mp4;codecs=avc1,mp4a.40.2' || type === 'video/webm'));
+  assert.equal(mp4.mimeType, 'video/mp4;codecs=avc1,mp4a.40.2'); assert.equal(mp4.extension, 'mp4');
   const webm = getBrowserRenderSupport(environment(type => type === 'video/webm;codecs=vp8,opus'));
   assert.equal(webm.extension, 'webm'); assert.equal(webm.label, 'WebM');
   const plan = validateBrowserRender(variant(), [source('a')], { support: webm });
   assert.equal(plan.extension, 'webm'); assert.ok(plan.warnings.some(warning => warning.includes('WebM')));
+});
+
+test('generic MP4 support cannot silently select VP9/Opus in an MP4 container', () => {
+  const result = getBrowserRenderSupport(environment(type => type === 'video/mp4' || type === 'video/webm;codecs=vp8,opus'));
+  assert.equal(result.extension, 'webm');
+  assert.equal(getBrowserRenderSupport(environment(type => type === 'video/mp4')).supported, false);
 });
 
 test('throwing MIME probes are isolated and no supported codec is a clear failure', () => {

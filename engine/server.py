@@ -244,11 +244,19 @@ class App:
                     self.store.write_json(f'generated/{vid}/render-plan.json',read_json(stage/'render-plan.json'))
                     self.write_posting(p,v)
                 result['path']=str(target.relative_to(self.store.root))
-                with self.mutex:self.job.update(status='done',phase='complete',stagePercent=100,detail='노른노른하게 완성됐어요.',result=result,finishedAt=time.time())
             finally:shutil.rmtree(stage,ignore_errors=True)
+            # A published completion permits another request immediately. Finish
+            # cleanup and subclass artifact/cache promotion before exposing done.
+            with self.mutex:
+                self._finalize_render(result,v,p,payload)
+                self.job.update(status='done',phase='complete',stagePercent=100,detail='노른노른하게 완성됐어요.',result=result,finishedAt=time.time())
         except Exception as e:
             with self.mutex:self.job.update(status='cancelled' if isinstance(e,RenderCancelled) else 'error',detail=str(e)[:4000],finishedAt=time.time())
             self.store.write_json('logs/last-error.json',{'error':str(e),'job':self.job})
+
+    def _finalize_render(self,result,v,p,payload):
+        """Finalize derivatives under the job lock before publishing completion."""
+        pass
 
     def write_posting(self,p,v):
         title=p['title'];body=p['description'];lines=[r.get('caption','') for r in v['scenes'] if r.get('caption')]
