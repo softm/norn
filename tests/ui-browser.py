@@ -208,7 +208,7 @@ def check_timeline_ux(page):
         expect_ids(ids[1:])
         assert selected_id() == ids[1]
         assert page.locator(".modal").count() == 0
-        undo()
+        page.locator("#toast [data-action=undo]").click()
         expect_ids(ids)
         assert selected_id() == ids[1]
 
