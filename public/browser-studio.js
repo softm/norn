@@ -241,9 +241,10 @@ export function installBrowserStudio(C) {
       controls.innerHTML=button('addfiles','파일 선택','primary small')+button('addfolder','폴더 선택');$('.library-grid')?.before(controls);
       if(!state().media.length){const empty=document.createElement('div');empty.className='local-drop-hint';empty.textContent='여기에 사진·영상이나 폴더를 끌어놓으세요.';$('.library-grid')?.append(empty);}
       const info=document.createElement('div');info.className='local-library-info';
-      info.innerHTML='<span>원본은 선택한 위치에 그대로 있어요.</span>'+button('import-report','불러오기 결과','ghost small')+button('new-project','새 이야기','ghost small');library.append(info);
+      info.textContent='원본은 선택한 위치에 그대로 있어요.';library.append(info);
+      library.querySelector('.library-more')?.insertAdjacentHTML('beforeend',button('import-report','불러오기 결과','ghost small')+button('new-project','새 이야기','ghost small'));
     }
-    const nav=$('#workflow-nav');if(nav){nav.innerHTML=button('connect','1 자료 선택')+button('concept','2 이야기 구성')+button('focus-timeline','3 장면 편집')+button('posting','4 영상·게시 준비');}
+    const nav=$('#workflow-nav');if(nav){nav.innerHTML=button('connect','1 자료 추가')+button('focus-timeline','2 장면 편집')+button('render','3 영상 저장');}
     if(state().media.length===0&&state().project.variants.some(v=>v.scenes.length)&&!$('#local-relink-banner')){
       const banner=document.createElement('div');banner.id='local-relink-banner';banner.className='connection-banner local-relink';banner.innerHTML='편집정보를 복원했습니다. 같은 원본을 다시 선택하면 순서·문구·구간을 유지합니다. '+button('relink-files','원본 다시 선택');$('.workflow-nav')?.after(banner);
     }
@@ -253,7 +254,7 @@ export function installBrowserStudio(C) {
     const timelapse=$('[data-action="timelapse"]');if(timelapse)timelapse.hidden=true;
     const music=$('[data-action="builtin-music"]');if(music){music.textContent='음악 파일 선택';music.dataset.action='addaudio';}
     const info=support();const note=$('.stage-note');
-    if(note)note.textContent=info.supported?'이 장면 미리보기로 글씨·효과를 확인하고 영상 굽기로 '+info.label+' 파일을 저장하세요.':info.reason;
+    if(note)note.textContent=info.supported?'이 장면 미리보기로 글씨·효과를 확인하고 영상 저장으로 '+info.label+' 파일을 저장하세요.':info.reason;
     const stageLabel=$('#connection-label');if(stageLabel){stageLabel.classList.add('on');stageLabel.textContent='브라우저에서 편집';}
     const running=busy();
     document.querySelectorAll('.studio button,.studio input,.studio select,.studio textarea,.studio .clip').forEach(element=>{

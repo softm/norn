@@ -146,6 +146,147 @@ def active(data):
     return next(item for item in data["variants"] if item["id"] == data["activeVariant"])
 
 
+def check_timeline_ux(page):
+    """Exercise deletion and recovery through the same visible controls as a user."""
+    original = project(page)
+    scenes = active(original)["scenes"]
+    ids = [scene["id"] for scene in scenes]
+    assert len(ids) == 3
+    dialogs = []
+
+    def record_dialog(dialog):
+        dialogs.append(dialog.type)
+
+    def unchanged_sources():
+        assert project(page)["assets"] == original["assets"], "Timeline edit changed source resources"
+        assert page.locator(".asset").count() == 3
+
+    def expect_ids(expected):
+        assert [scene["id"] for scene in active(project(page))["scenes"]] == expected
+        assert page.locator(".clip").count() == len(expected)
+        unchanged_sources()
+
+    def selected_id():
+        return page.locator(".clip.selected").get_attribute("data-id")
+
+    def select(scene_id):
+        page.locator(f'.clip-select[data-id="{scene_id}"]').click()
+        assert selected_id() == scene_id
+
+    def undo():
+        page.locator(".timeline [data-action=undo]").click()
+
+    page.on("dialog", record_dialog)
+    try:
+        assert page.locator('.topbar a[href*="github.com"]').count() == 0
+        assert "되돌" in page.locator(".timeline [data-action=undo]").inner_text()
+        assert "다시" in page.locator(".timeline [data-action=redo]").inner_text()
+        select(ids[0])
+        assert page.locator(".text-options").get_attribute("open") is None
+        assert page.locator('[data-bind="duration"]').is_visible(), "Photo duration is hidden behind advanced settings"
+
+        # Every clip exposes its own touch-sized delete control without hover.
+        page.set_viewport_size({"width": 390, "height": 844})
+        targets = []
+        for index in range(3):
+            button = page.locator(".clip-delete").nth(index)
+            button.scroll_into_view_if_needed()
+            assert button.is_visible()
+            box = button.bounding_box()
+            assert box and box["width"] >= 40 and box["height"] >= 40, box
+            assert box["x"] >= -1 and box["x"] + box["width"] <= 391, box
+            targets.append({key: round(box[key], 2) for key in ("width", "height")})
+        layout = page.evaluate("({viewport: innerWidth, page: document.documentElement.scrollWidth})")
+        assert layout["page"] <= layout["viewport"] + 1, layout
+        page.screenshot(path=str(OUT / "timeline-mobile.png"), full_page=True)
+        REPORT["timelineMobile"] = {**layout, "deleteTargets": targets}
+        page.set_viewport_size({"width": 1440, "height": 1000})
+
+        # Delete a different card without changing which remaining card is edited.
+        select(ids[1])
+        page.locator(f'.clip-delete[data-id="{ids[0]}"]').click()
+        expect_ids(ids[1:])
+        assert selected_id() == ids[1]
+        assert page.locator(".modal").count() == 0
+        undo()
+        expect_ids(ids)
+        assert selected_id() == ids[1]
+
+        # Removing the selected card picks a neighbour; undo restores that card
+        # and its selection. Redo then repeats the same operation.
+        page.locator(f'.clip-delete[data-id="{ids[1]}"]').click()
+        expect_ids([ids[0], ids[2]])
+        assert selected_id() in (ids[0], ids[2])
+        undo()
+        expect_ids(ids)
+        assert selected_id() == ids[1]
+        page.locator(".timeline [data-action=redo]").click()
+        expect_ids([ids[0], ids[2]])
+        page.locator("#track").focus()
+        page.keyboard.press("Control+z")
+        expect_ids(ids)
+        assert selected_id() == ids[1]
+
+        # Delete/Backspace work only in the timeline. Editing controls keep their
+        # native keyboard behavior and must not invoke project undo or deletion.
+        select(ids[0])
+        page.locator("#track").focus()
+        page.keyboard.press("Delete")
+        expect_ids(ids[1:])
+        for selector in ("#scene-name", "#scene-caption", "#variant"):
+            reveal(page, selector).focus()
+            page.keyboard.press("End")
+            page.keyboard.press("Delete")
+            page.keyboard.press("Home")
+            page.keyboard.press("Backspace")
+            page.keyboard.press("Control+z")
+            expect_ids(ids[1:])
+        page.locator("[data-action=render]").first.focus()
+        page.keyboard.press("Delete")
+        page.keyboard.press("Backspace")
+        expect_ids(ids[1:])
+        page.locator("#track").focus()
+        page.keyboard.press("Control+z")
+        expect_ids(ids)
+        assert selected_id() == ids[0]
+        page.keyboard.press("Control+Shift+z")
+        expect_ids(ids[1:])
+        page.keyboard.press("Control+z")
+        expect_ids(ids)
+        page.locator("#track").focus()
+        page.keyboard.press("Backspace")
+        expect_ids(ids[1:])
+        undo()
+        expect_ids(ids)
+
+        page.locator(".timeline [data-action=delete]").click()
+        expect_ids(ids[1:])
+        undo()
+        expect_ids(ids)
+        assert selected_id() == ids[0]
+
+        # An empty timeline is recoverable and never deletes the imported media.
+        for remaining in range(2, -1, -1):
+            page.locator(".clip-delete").first.click()
+            expect_ids(ids[3 - remaining:])
+        assert page.locator("#track").get_attribute("tabindex") == "0"
+        assert page.evaluate("document.activeElement?.id") == "track"
+        assert page.locator(".timeline [data-action=delete]").is_disabled()
+        for _ in ids:
+            undo()
+        expect_ids(ids)
+        assert active(project(page))["scenes"] == scenes, "Undo changed original scene order or edits"
+        assert not dialogs, f"Timeline deletion unexpectedly prompted for confirmation: {dialogs}"
+        REPORT["checks"].append("GitHub header link removed; advanced text settings collapsed; photo duration stays visible")
+        REPORT["checks"].append("390px viewport has no horizontal page overflow; every clip has a visible delete target of at least 40px")
+        REPORT["checks"].append("per-card and selected deletion preserve remaining selection; undo/redo restore deleted scenes, selection and order")
+        REPORT["checks"].append("timeline Delete/Backspace and undo/redo work; text/select and outside-timeline keys do not delete scenes")
+        REPORT["checks"].append("all clips can be deleted without confirmation and restored; empty track retains focus and all source assets")
+    finally:
+        page.remove_listener("dialog", record_dialog)
+        page.set_viewport_size({"width": 1440, "height": 1000})
+
+
 def download(page, selector, name=None):
     with page.expect_download(timeout=8000) as event:
         page.locator(selector).first.click()
@@ -323,6 +464,7 @@ try:
             page = context.new_page()
             try:
                 page.goto(base + "/", wait_until="networkidle", timeout=12000)
+                assert page.locator('.topbar a[href*="github.com"]').count() == 0
                 choose(page, ".hero [data-action=addfiles]", [source / "01-photo.jpg", source / "02-video.mp4"])
                 page.wait_for_function("document.querySelectorAll('.clip').length === 2")
                 idle(page)
@@ -336,23 +478,24 @@ try:
                 assert "nested/03-photo.png" in page.locator(".library-grid").inner_text()
                 assert len(project(page)["assets"]) == 4  # WAV is a resource, never a visual scene.
                 REPORT["checks"].append("native file chooser + recursive folder selection, duplicate skip and document exclusion")
+                check_timeline_ux(page)
 
-                page.locator(".clip").nth(0).click()
+                page.locator(".clip-select").nth(0).click()
                 fill(page, "#scene-title", "로컬 자료로 만든 영상")
                 fill(page, "#scene-caption", "사진·영상·원음을 직접 편집했습니다.")
                 fill(page, '[data-bind="duration"]', "3")
-                page.locator(".clip").nth(1).click()
+                page.locator(".clip-select").nth(1).click()
                 reveal(page, '[data-bind="keep_audio"]').check()
                 reveal(page, "#mute-all").uncheck()
                 reveal(page, "#music")
                 assert page.locator('#music option:not([value=""])').count() == 1
                 assert page.locator("#music").input_value() == ""  # Prove audio comes from the video.
-                page.locator(".clip").nth(2).click()
+                page.locator(".clip-select").nth(2).click()
                 fill(page, '[data-bind="duration"]', "3")
                 page.locator("[data-action=moveleft]").click()
                 page.locator("[data-action=moveleft]").click()
                 assert "03-photo" in page.locator(".clip-top").first.inner_text()
-                page.locator(".clip").nth(2).click()
+                page.locator(".clip-select").nth(2).click()
                 page.locator("[data-action=moveleft]").click()
                 assert "02-video" in page.locator(".clip-top").nth(1).inner_text()
                 saved = download(page, "[data-action=save]", "project.json")
@@ -368,15 +511,25 @@ try:
                 page.screenshot(path=str(OUT / "edited.png"), full_page=True)
                 REPORT["checks"].append("scene order, caption, fractional video duration and source-audio settings persist to JSON")
 
-                page.locator("[data-action=render]").click()
+                page.locator("[data-action=render]").first.click()
+                page.keyboard.press("Delete")
+                page.keyboard.press("Backspace")
+                page.keyboard.press("Control+z")
+                assert active(project(page))["scenes"] == variant["scenes"], "Modal keyboard shortcut changed timeline"
                 page.locator("[data-action=start-browser-export]").click()
                 page.wait_for_function("document.querySelector('#progress .label')?.textContent.includes('장면 굽는 중')", timeout=12000)
+                page.locator("#track").focus()
+                page.keyboard.press("Delete")
+                page.keyboard.press("Backspace")
+                page.keyboard.press("Control+z")
+                assert active(project(page))["scenes"] == variant["scenes"], "Busy export keyboard shortcut changed timeline"
                 page.locator("#progress [data-action=cancel]").click()
                 page.wait_for_function("document.querySelector('#progress .label')?.textContent.includes('중지됨')")
                 idle(page)
                 assert page.locator("#browser-result-player").count() == 0
+                REPORT["checks"].append("modal and active export prevent timeline deletion and project undo shortcuts")
                 delay_next_video_start(page)
-                page.locator("[data-action=render]").click()
+                page.locator("[data-action=render]").first.click()
                 delay_animation_frames(page)
                 try:
                     probe_animation_frame_delay(page, "before-export")
@@ -425,6 +578,7 @@ try:
                 recovery = recovery_context.new_page()
                 recovery.goto(base + "/#studio", wait_until="networkidle")
                 assert recovery.locator(".clip").count() == 0
+                recovery.locator(".library-more > summary").click()
                 choose(recovery, "[data-action=import]", saved)
                 recovery.wait_for_selector("#local-relink-banner")
                 assert recovery.locator(".clip").count() == 3 and recovery.locator(".asset").count() == 0
