@@ -149,22 +149,34 @@ class WorkspaceApp(App):
                 m=self.by_id[sid];st=self.source_path(m['id']).stat()
                 if m['stat']!=f'{st.st_size}:{st.st_mtime_ns}':raise ValueError('원본이 변경되었습니다. 원본 다시 읽기 후 검토하세요.')
         result=super().start(request,kind)
-        self.store.write_json('last-job.json',self.job)
+        with self.mutex:self.store.write_json('last-job.json',self.job)
         return result
+
+    def _finalize_render(self,result,v,p,payload):
+        key=payload.get('_fingerprint','');vid=v['id']
+        result.update(fingerprint=key,createdAt=time.time(),variantId=vid)
+        if payload.get('preview'):
+            target=self.store.path(f'generated/{vid}/preview-{key[:24]}.mp4')
+            old=core.safe_path(self.store.root,result['path'])
+            os.replace(old,target);result['path']=str(target.relative_to(self.store.root))
+            self.store.write_json(f'.cache/previews/{key}.json',result)
+        else:self.store.write_json(f'generated/{vid}/result.json',result)
 
     def _worker(self,kind,v,p,payload):
         key=payload.get('_fingerprint','')
         if payload.get('boundaryId'):v=boundary_variant(v,payload['boundaryId'])
         with self.mutex:
+            jid=self.job.get('id')
             self.job.update(variantId=v['id'] if v else p['activeVariant'],sceneId=payload.get('sceneId'),transitionPreview=bool(payload.get('boundaryId')))
-        vid=v['id'] if v else p['activeVariant']
         cache=self.store.path(f'.cache/previews/{key}.json') if key else None
         if kind=='render' and payload.get('preview') and cache and cache.exists():
             try:
                 result=json.loads(cache.read_text());file=core.safe_path(self.store.root,result['path'])
                 if file.is_file() and result.get('size')==file.stat().st_size and core.file_hash(file)==result.get('sha256'):
-                    with self.mutex:self.job.update(status='done',phase='complete',result={**result,'cache_hit':True},detail='저장된 배속 미리보기를 재사용했습니다.',stagePercent=100,finishedAt=time.time())
-                    self.store.write_json('last-job.json',self.job);return
+                    with self.mutex:
+                        self.job.update(status='done',phase='complete',result={**result,'cache_hit':True},detail='저장된 배속 미리보기를 재사용했습니다.',stagePercent=100,finishedAt=time.time())
+                        self.store.write_json('last-job.json',self.job)
+                    return
             except (OSError,ValueError,KeyError):pass
         if kind=='concept':
             try:
@@ -178,14 +190,9 @@ class WorkspaceApp(App):
         else:
             super()._worker(kind,v,p,payload)
         with self.mutex:
-            if self.job['status']=='done' and kind=='render':
-                result=self.job['result'];result.update(fingerprint=key,createdAt=time.time(),variantId=vid)
-                if payload.get('preview'):
-                    target=self.store.path(f'generated/{vid}/preview-{key[:24]}.mp4')
-                    old=core.safe_path(self.store.root,result['path'])
-                    os.replace(old,target);result['path']=str(target.relative_to(self.store.root))
-                    self.store.write_json(f'.cache/previews/{key}.json',result)
-                else:self.store.write_json(f'generated/{vid}/result.json',result)
+            # A request may have started after the completed job was published.
+            # Never finalize or rewrite that newer job from the previous worker.
+            if self.job.get('id')!=jid:return
             if self.cancel.is_set() and self.job['status']=='error':self.job.update(status='cancelled',detail='분석을 취소했습니다. 기존 편집은 유지됩니다.')
             self.store.write_json('last-job.json',self.job)
 

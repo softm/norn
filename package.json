@@ -1,10 +1,10 @@
 {
   "name": "norn",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test tests/domain.test.mjs tests/firebase-config.test.mjs tests/workspace.test.mjs tests/root-routing.test.mjs",
+    "test": "node --test tests/domain.test.mjs tests/firebase-config.test.mjs tests/workspace.test.mjs tests/root-routing.test.mjs tests/local-media.test.mjs tests/browser-renderer.test.mjs tests/browser-package.test.mjs",
     "build": "node scripts/build.mjs",
     "serve": "python3 -m http.server 5173 --directory public",
     "test:rules": "firebase emulators:exec --only firestore --project demo-norn 'node --test tests/firestore.test.mjs tests/cloud-store.test.mjs'",
