@@ -4,8 +4,8 @@ Run in CI: python tests/ui-browser.py [output-directory]
 Requires Pillow, ffmpeg/ffprobe and Playwright Chromium. No engine process, OAuth,
 renderer mock or uploaded originals. Firebase is disabled only by a browser route.
 The exported video is about 8.5 seconds. NORN_HEADED=1 uses a real headed browser
-(run with xvfb-run in CI). A test-only delay postpones one native source play;
-decoding, Web Audio, recording and output verification remain real.
+(run with xvfb-run in CI). Test-only asynchronous delays postpone one native
+source play and rAF delivery; decoding, audio, recording and clocks remain real.
 """
 import array
 import functools
@@ -185,6 +185,78 @@ def delay_next_video_start(page, milliseconds=600):
     }""", milliseconds)
 
 
+def delay_animation_frames(page, milliseconds=1000):
+    # Model a visible surface whose repaint callbacks arrive at about 1 Hz.
+    # Native rAF still runs; only callback delivery waits on a nonblocking timer.
+    # Timer pacing, media playback and performance.now() are never replaced.
+    page.evaluate("""milliseconds => {
+      const nativeRequest = window.requestAnimationFrame;
+      const nativeCancel = window.cancelAnimationFrame;
+      const pending = new Map();
+      const state = window.__nornRafDelay = {
+        requestedMs: milliseconds, requested: 0, delivered: 0, cancelled: 0,
+        minimumDelayMs: null, maximumDelayMs: 0, probes: [], active: true, restored: false
+      };
+      window.requestAnimationFrame = callback => {
+        if (typeof callback !== 'function') return nativeRequest.call(window, callback);
+        const entry = { callback, started: performance.now(), timer: null };
+        const id = nativeRequest.call(window, () => {
+          if (!pending.has(id)) return;
+          entry.timer = setTimeout(() => {
+            if (!pending.delete(id)) return;
+            const delay = performance.now() - entry.started;
+            state.delivered++;
+            state.minimumDelayMs = Math.min(state.minimumDelayMs ?? delay, delay);
+            state.maximumDelayMs = Math.max(state.maximumDelayMs, delay);
+            callback.call(window, performance.now());
+          }, milliseconds);
+        });
+        pending.set(id, entry);
+        state.requested++;
+        return id;
+      };
+      window.cancelAnimationFrame = id => {
+        const entry = pending.get(id);
+        if (entry) { clearTimeout(entry.timer); pending.delete(id); state.cancelled++; }
+        nativeCancel.call(window, id);
+      };
+      window.__nornRestoreRaf = () => {
+        if (!state.active) return;
+        state.active = false;
+        window.requestAnimationFrame = nativeRequest;
+        window.cancelAnimationFrame = nativeCancel;
+        // Preserve pending UI callbacks when restoring normal delivery.
+        for (const [id, entry] of pending) {
+          clearTimeout(entry.timer);
+          nativeCancel.call(window, id);
+          nativeRequest.call(window, entry.callback);
+        }
+        pending.clear();
+        state.restored = true;
+      };
+    }""", milliseconds)
+
+
+def probe_animation_frame_delay(page, label):
+    probe = page.evaluate("""label => new Promise(resolve => {
+      const state = window.__nornRafDelay, started = performance.now();
+      requestAnimationFrame(() => {
+        const probe = { label, actualMs: performance.now() - started,
+          visibility: document.visibilityState, active: state.active };
+        state.probes.push(probe);
+        resolve(probe);
+      });
+    })""", label)
+    assert probe["active"] and probe["visibility"] == "visible" and probe["actualMs"] >= 950, probe
+
+
+def restore_animation_frames(page):
+    return page.evaluate("""() => {
+      window.__nornRestoreRaf?.();
+      return window.__nornRafDelay || null;
+    }""")
+
+
 def inspect_video(path, expected, video_start, video_duration):
     probe = json.loads(command(["ffprobe", "-v", "error", "-show_format", "-show_streams",
                                 "-show_packets", "-of", "json", str(path)]))
@@ -305,9 +377,17 @@ try:
                 assert page.locator("#browser-result-player").count() == 0
                 delay_next_video_start(page)
                 page.locator("[data-action=render]").click()
-                page.locator("[data-action=start-browser-export]").click()
-                page.wait_for_function("document.querySelector('#browser-result-player') || document.querySelector('.error-box') || document.querySelector('#progress .error')", timeout=25000)
+                delay_animation_frames(page)
+                try:
+                    probe_animation_frame_delay(page, "before-export")
+                    page.locator("[data-action=start-browser-export]").click()
+                    probe_animation_frame_delay(page, "during-export")
+                    # This wait must not depend on the rAF service being exercised.
+                    page.wait_for_function("document.querySelector('#browser-result-player') || document.querySelector('.error-box') || document.querySelector('#progress .error')", polling=50, timeout=25000)
+                finally:
+                    REPORT["rafDelay"] = restore_animation_frames(page)
                 assert page.locator("#browser-result-player").count() == 1, page.locator("body").inner_text()[-2000:]
+                assert REPORT["rafDelay"]["restored"] and REPORT["rafDelay"]["delivered"] >= 2, REPORT["rafDelay"]
                 REPORT["playbackDelay"] = page.evaluate("window.__nornPlaybackDelay")
                 delay = REPORT["playbackDelay"]
                 assert delay["applied"] == 1 and delay["resolved"] and delay["actualMs"] >= 550, delay
@@ -316,6 +396,7 @@ try:
                 page.screenshot(path=str(OUT / "completed.png"), full_page=True)
                 REPORT["checks"].append("real export cancellation and retry; downloaded container, dimensions, timing, audio and changing frames verified")
                 REPORT["checks"].append("600ms native video-start delay is absorbed before recording; original audio starts at its planned scene boundary")
+                REPORT["checks"].append("visible-page rAF callbacks delayed at least 1000ms before and during real export; timer-paced output retains timing and source audio")
 
                 page.locator(".modal [data-action=posting]").click()
                 page.locator("#public-note").fill("공개할 짧은 소개")
@@ -363,6 +444,7 @@ try:
                 REPORT["status"] = "passed"
             except Exception:
                 try:
+                    REPORT["rafDelay"] = restore_animation_frames(page)
                     REPORT["playbackDelay"] = page.evaluate("window.__nornPlaybackDelay || null")
                     if page.locator("#progress").count():
                         REPORT["browserProgress"] = page.locator("#progress").inner_text()

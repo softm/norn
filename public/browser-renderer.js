@@ -43,7 +43,7 @@ export class BrowserRenderError extends Error {
 }
 function fail(message, code, details) { throw new BrowserRenderError(message, code, details); }
 
-/** Check every animation tick, but composite at most once per output-frame bucket. */
+/** Check every recording tick, but composite at most once per output-frame bucket. */
 export function createBrowserFramePacer(fps, startedAt) {
   number(fps, undefined, BROWSER_RENDER_LIMITS.minFps, BROWSER_RENDER_LIMITS.maxFps, 'FPS');
   let previousTick = startedAt; let lastFrame = -1;
@@ -55,6 +55,44 @@ export function createBrowserFramePacer(fps, startedAt) {
       const draw = frame > lastFrame;
       if (draw) lastFrame = frame;
       return { draw, frame, frameIntervalMs };
+    },
+  };
+}
+
+/**
+ * The recording clock follows output-frame deadlines, independently of page
+ * animation/compositor scheduling. Deadlines stay anchored to the recording
+ * start, so drawing time is not repeatedly added to the frame interval.
+ * A late callback skips expired deadlines rather than posting a catch-up loop.
+ */
+export function createBrowserFrameScheduler(fps, startedAt, {
+  now = () => performance.now(),
+  setTimer = (callback, delay) => setTimeout(callback, delay),
+  clearTimer = id => clearTimeout(id),
+} = {}) {
+  number(fps, undefined, BROWSER_RENDER_LIMITS.minFps, BROWSER_RENDER_LIMITS.maxFps, 'FPS');
+  let nextFrame = 1;
+  return {
+    wait(signal) {
+      return new Promise((resolve, reject) => {
+        if (signal.aborted) { reject(abortReason(signal)); return; }
+        let timer; let settled = false;
+        const cleanup = () => { if (timer != null) clearTimer(timer); signal.removeEventListener('abort', aborted); };
+        const aborted = () => { if (settled) return; settled = true; cleanup(); reject(abortReason(signal)); };
+        signal.addEventListener('abort', aborted, { once: true });
+        const deadline = startedAt + nextFrame * 1000 / fps;
+        // Even overdue work yields a timer task; never spin or recursively drain.
+        const delay = Math.max(1, Math.ceil(deadline - now()));
+        try {
+          timer = setTimer(() => {
+            if (settled) return;
+            if (signal.aborted) { aborted(); return; }
+            const actual = now();
+            nextFrame = Math.max(nextFrame + 1, Math.floor(Math.max(0, actual - startedAt) * fps / 1000 + .000001) + 1);
+            settled = true; cleanup(); resolve(actual);
+          }, delay);
+        } catch (error) { settled = true; cleanup(); reject(error); }
+      });
     },
   };
 }
@@ -95,7 +133,7 @@ export function getBrowserRenderSupport(env = globalThis) {
   if (typeof env.MediaRecorder !== 'function' || typeof env.MediaRecorder.isTypeSupported !== 'function') missing.push('영상 저장');
   if (typeof env.HTMLCanvasElement?.prototype?.captureStream !== 'function') missing.push('화면 합성');
   if (typeof env.MediaStream !== 'function') missing.push('영상 스트림');
-  if (typeof env.requestAnimationFrame !== 'function') missing.push('영상 프레임');
+  if (typeof env.setTimeout !== 'function' || typeof env.clearTimeout !== 'function') missing.push('영상 타이머');
   const audioSupported = typeof (env.AudioContext || env.webkitAudioContext) === 'function';
   const unavailable = reason => ({ supported: false, mimeType: '', extension: '', label: '', reason, audioSupported });
   if (missing.length) return unavailable(`이 브라우저는 ${missing.join('·')} 기능을 제공하지 않습니다. 최신 Chrome, Edge 또는 Safari에서 열어주세요.`);
@@ -270,15 +308,6 @@ function bounded(promise, signal, label, timeout = 15000) {
     signal.addEventListener('abort', cancel, { once: true });
     timer = setTimeout(() => settle(reject, new BrowserRenderError(`${label} 시간이 초과되었습니다. 다시 시도하세요.`, 'RENDER_TIMEOUT')), timeout);
     Promise.resolve(promise).then(value => settle(resolve, value), error => settle(reject, error));
-  });
-}
-function nextFrame(signal) {
-  return new Promise((resolve, reject) => {
-    if (signal.aborted) { reject(abortReason(signal)); return; }
-    let id;
-    const cancel = () => { cancelAnimationFrame(id); signal.removeEventListener('abort', cancel); reject(abortReason(signal)); };
-    signal.addEventListener('abort', cancel, { once: true });
-    id = requestAnimationFrame(time => { signal.removeEventListener('abort', cancel); resolve(time); });
   });
 }
 async function seek(media, time, signal, label) {
@@ -610,6 +639,7 @@ export async function renderInBrowser({ variant, media, signal: externalSignal, 
     await eventReady(recorder, ['start'], { signal, label: '영상 인코더', ready: () => recorder.state === 'recording', trigger: () => recorder.start(1000) });
     recordingStarted = performance.now(); const audioStarted = audioContext?.currentTime;
     const pacer = createBrowserFramePacer(plan.fps, recordingStarted);
+    const scheduler = createBrowserFrameScheduler(plan.fps, recordingStarted);
     let elapsed = 0;
     progress('encoding', 5, '이 화면을 유지하세요. 영상 길이만큼 시간이 걸립니다.');
     while (elapsed < plan.duration) {
@@ -663,7 +693,7 @@ export async function renderInBrowser({ variant, media, signal: externalSignal, 
       }
       if (tick.draw) composite(output.context, frame.layers, frame.transition, resources, plan.width, plan.height);
       if (now - lastReported > 200) { progress('encoding', 5 + elapsed / plan.duration * 89, `${Math.min(plan.scenes.length, last + 1)} / ${plan.scenes.length} 장면 · ${elapsed.toFixed(1)} / ${plan.duration.toFixed(1)}초`, elapsed); lastReported = now; }
-      await nextFrame(signal);
+      await scheduler.wait(signal);
     }
     check(signal);
     for (const resource of resources.values()) resource.element.pause?.(); musicResource?.element.pause();
