@@ -104,7 +104,8 @@ function render(){
  const panels=sameScene?[...inspector.querySelectorAll('details[data-panel]')].map(el=>[el.dataset.panel,el.open]):[];
  const inspectorScroll=sameScene?inspector.scrollTop:0;
  page==='home'?home():studio();plus?.mount();browserStudio?.mount();observeHeader();
- if($('#track')?.dataset.variantId===trackVariant)$('#track').scrollLeft=trackScroll;
+ const renderedTrack=$('#track');
+ if(renderedTrack&&renderedTrack.dataset.variantId===trackVariant)renderedTrack.scrollLeft=trackScroll;
  for(const [name,open] of panels){const panel=$('.inspector details[data-panel="'+name+'"]');if(panel)panel.open=open}
  if(sameScene&&$('.inspector'))$('.inspector').scrollTop=inspectorScroll;
 }

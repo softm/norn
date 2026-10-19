@@ -146,6 +146,30 @@ def active(data):
     return next(item for item in data["variants"] if item["id"] == data["activeVariant"])
 
 
+def check_import_history(page, before_import):
+    """New originals invalidate stale redo; one undo removes only their edits."""
+    imported = project(page)
+    imported_scenes = active(imported)["scenes"]
+    assert len(imported_scenes) == len(active(before_import)["scenes"]) + 1
+    assert page.locator(".timeline [data-action=redo]").is_disabled(), "Import kept stale redo"
+    page.locator("#track").focus()
+    page.keyboard.press("Control+Shift+z")
+    assert active(project(page))["scenes"] == imported_scenes, "Stale redo removed newly imported scenes"
+
+    page.locator(".timeline [data-action=undo]").click()
+    undone = project(page)
+    assert active(undone)["scenes"] == active(before_import)["scenes"], "Import was not one undoable edit"
+    assert undone["title"] == before_import["title"]
+    assert undone["assets"] == imported["assets"], "Undo lost the imported originals' manifest"
+    assert page.locator(".asset").count() == 3, "Undo removed imported source resources"
+    page.locator(".timeline [data-action=redo]").click()
+    restored = project(page)
+    assert active(restored)["scenes"] == imported_scenes, "Import redo changed scene IDs, order or edits"
+    assert restored["title"] == imported["title"]
+    assert restored["assets"] == imported["assets"]
+    REPORT["checks"].append("new file import clears stale deletion redo; one undo/redo restores its scenes and title while preserving source resources and manifest")
+
+
 def check_timeline_ux(page):
     """Exercise deletion and recovery through the same visible controls as a user."""
     original = project(page)
@@ -469,6 +493,10 @@ try:
                 page.wait_for_function("document.querySelectorAll('.clip').length === 2")
                 idle(page)
                 assert "브라우저에서 편집" in page.locator("#connection-label").inner_text()
+                before_folder_import = project(page)
+                page.locator(".clip-delete").first.click()
+                page.locator(".timeline [data-action=undo]").click()
+                assert page.locator(".timeline [data-action=redo]").is_enabled()
                 choose(page, "#local-import-buttons [data-action=addfolder]", source, folder=True)
                 page.wait_for_selector(".import-issues")
                 assert "notes.txt" in page.locator(".import-issues").inner_text()
@@ -478,6 +506,7 @@ try:
                 assert "nested/03-photo.png" in page.locator(".library-grid").inner_text()
                 assert len(project(page)["assets"]) == 4  # WAV is a resource, never a visual scene.
                 REPORT["checks"].append("native file chooser + recursive folder selection, duplicate skip and document exclusion")
+                check_import_history(page, before_folder_import)
                 check_timeline_ux(page)
 
                 page.locator(".clip-select").nth(0).click()
@@ -582,13 +611,22 @@ try:
                 choose(recovery, "[data-action=import]", saved)
                 recovery.wait_for_selector("#local-relink-banner")
                 assert recovery.locator(".clip").count() == 3 and recovery.locator(".asset").count() == 0
+                recovery.locator(".clip-delete").first.click()
+                recovery.locator(".timeline [data-action=undo]").click()
+                assert recovery.locator(".timeline [data-action=redo]").is_enabled()
                 choose(recovery, "#local-relink-banner [data-action=relink-files]",
                        [source / "01-photo.jpg", source / "02-video.mp4", source / "nested/03-photo.png", source / "nested/04-tone.wav"])
                 recovery.wait_for_function("document.querySelectorAll('.asset').length === 3 && !document.querySelector('#local-relink-banner')")
                 idle(recovery)
                 assert active(project(recovery))["scenes"] == variant["scenes"], "Relinking changed saved scene edits/order/timing"
+                assert recovery.locator(".timeline [data-action=redo]").is_enabled(), "Relinking discarded edit history"
+                recovery.locator(".timeline [data-action=redo]").click()
+                assert active(project(recovery))["scenes"] == variant["scenes"][1:]
+                recovery.locator(".timeline [data-action=undo]").click()
+                assert active(project(recovery))["scenes"] == variant["scenes"]
+                assert recovery.locator(".asset").count() == 3
                 recovery.screenshot(path=str(OUT / "recovered.png"), full_page=True)
-                REPORT["checks"].append("downloaded JSON opens in clean context; reselected originals preserve all scenes and edits without duplication")
+                REPORT["checks"].append("downloaded JSON opens in clean context; reselected originals preserve all scenes, edits and undo/redo without duplication")
                 recovery_context.close()
                 assert hashes(source) == before, "Original filenames or content changed"
                 REPORT["originalHashes"] = before

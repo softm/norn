@@ -80,7 +80,13 @@ export function installBrowserStudio(C) {
       const path=imported.assets[0]?.relative_path||'';
       if(!folderName&&path.includes('/'))folderName=path.split('/')[0];
       if(project.title==='새 이야기'&&folderName)project.title=folderName.slice(0,160);
-      C.assign({project,media,selected:active.scenes.some(s=>s.id===prior.selected)?prior.selected:active.scenes[0]?.id||'',clearHistory:wasSample||wasEngine,previewUrl:'',unsaved:true});
+      const importedState={project,media,selected:active.scenes.some(s=>s.id===prior.selected)?prior.selected:active.scenes[0]?.id||'',clearHistory:wasSample||wasEngine,previewUrl:'',unsaved:true};
+      if(!onlyRelink&&!wasSample&&!wasEngine){
+        // Imported originals stay available when undo removes their new scenes.
+        // Relink first so the history snapshot keeps the complete asset manifest.
+        C.assign({project:W.relinkProject(prior.project,media).project,media});
+        edit(()=>C.assign(importedState));
+      }else C.assign(importedState);
       updateManifest();persist();
       const missing=project.variants.flatMap(v=>v.scenes).filter(s=>!media.some(m=>m.id===s.source_id)).length;
       const detail=`자료 ${imported.assets.length}개 연결 · ${onlyRelink?'기존 편집 유지':added+'개 장면 추가'}${missing?' · 미연결 장면 '+missing+'개':''}${imported.skipped.length?' · 제외 '+imported.skipped.length+'개':''}`;
