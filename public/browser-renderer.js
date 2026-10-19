@@ -32,13 +32,44 @@ const RECORDING_TYPES = Object.freeze([
   'video/webm;codecs=vp8,opus', 'video/webm;codecs=vp9,opus', 'video/webm',
 ]);
 const BACKGROUND_MESSAGE = '영상 생성 중 다른 탭이나 앱으로 이동해 작업을 멈췄습니다. 노른 화면을 유지한 채 다시 생성하세요.';
-const PERFORMANCE_MESSAGE = '기기의 영상 처리 속도가 부족해 생성을 중단했습니다. 출력 해상도·FPS를 낮추거나 장면을 짧게 나누어 다시 생성하세요.';
+const PERFORMANCE_MESSAGE = '영상 프레임 처리나 재생이 지연되어 생성을 중단했습니다. 출력 화질을 480p로 낮추거나 장면을 짧게 나누어 다시 생성하세요.';
 const clamp = (value, low, high) => Math.min(high, Math.max(low, value));
 
 export class BrowserRenderError extends Error {
-  constructor(message, code = 'BROWSER_RENDER') { super(message); this.name = 'BrowserRenderError'; this.code = code; }
+  constructor(message, code = 'BROWSER_RENDER', details = {}) {
+    super(message); this.name = 'BrowserRenderError'; this.code = code;
+    this.details = Object.freeze({ ...details });
+  }
 }
-function fail(message, code) { throw new BrowserRenderError(message, code); }
+function fail(message, code, details) { throw new BrowserRenderError(message, code, details); }
+
+/** Check every animation tick, but composite at most once per output-frame bucket. */
+export function createBrowserFramePacer(fps, startedAt) {
+  number(fps, undefined, BROWSER_RENDER_LIMITS.minFps, BROWSER_RENDER_LIMITS.maxFps, 'FPS');
+  let previousTick = startedAt; let lastFrame = -1;
+  return {
+    tick(now, details = {}) {
+      const frameIntervalMs = now - previousTick; previousTick = now;
+      if (frameIntervalMs > 500) fail(PERFORMANCE_MESSAGE, 'FRAME_STALL', { ...details, frameIntervalMs, maxFrameIntervalMs: 500, fps });
+      const frame = Math.floor(Math.max(0, now - startedAt) * fps / 1000 + .000001);
+      const draw = frame > lastFrame;
+      if (draw) lastFrame = frame;
+      return { draw, frame, frameIntervalMs };
+    },
+  };
+}
+
+/** Pending native play is a startup state, not evidence of a running decoder drifting. */
+export function validateBrowserPlayback(details, { requireStarted = false } = {}) {
+  const { playState, playElapsedMs, localTime, driftSeconds, ended, duration } = details;
+  if (playState === 'pending') {
+    if (requireStarted || playElapsedMs > 350) fail('원본 영상의 재생 시작이 지연되어 생성을 중단했습니다. 출력 화질을 480p로 낮추거나 짧은 구간으로 다시 생성하세요.', 'PLAYBACK_START_DELAY', { ...details, maxPlayStartMs: 350 });
+    return;
+  }
+  if (playState !== 'playing') fail('원본 영상이 재생을 시작하지 못해 생성을 중단했습니다.', 'PLAYBACK_NOT_STARTED', details);
+  if (localTime > .35 && driftSeconds > .35) fail(PERFORMANCE_MESSAGE, 'VIDEO_DESYNC', { ...details, maxDriftSeconds: .35 });
+  if (ended && localTime < duration - .1) fail(`${details.scene}번 영상 재생이 예상보다 일찍 끝났습니다. 원본 구간을 다시 확인하세요.`, 'SOURCE_ENDED', details);
+}
 function number(value, fallback, low, high, label) {
   const n = value == null ? fallback : value;
   if (typeof n !== 'number' || !Number.isFinite(n) || n < low || n > high) {
@@ -184,7 +215,7 @@ export function validateBrowserRender(variant, media, { support = getBrowserRend
   if (needsAudio && support.audioSupported === false) fail('이 브라우저에서 오디오 합성을 사용할 수 없습니다. 원음·음악을 끄거나 다른 최신 브라우저에서 열어주세요.', 'UNSUPPORTED_AUDIO');
   const videoBitsPerSecond = Math.round(clamp(width * height * fps * .16, 1_000_000, 16_000_000));
   if ((videoBitsPerSecond + (needsAudio ? 160000 : 0)) * duration / 8 > BROWSER_RENDER_LIMITS.maxOutputBytes * .9) {
-    fail('예상 결과 파일이 브라우저 메모리 한도를 넘습니다. 해상도·FPS를 낮추거나 영상을 짧게 나누세요.', 'OUTPUT_SIZE_LIMIT');
+    fail('예상 결과 파일이 브라우저 메모리 한도를 넘습니다. 출력 화질을 480p로 낮추거나 영상을 짧게 나누세요.', 'OUTPUT_SIZE_LIMIT');
   }
   const referenceWidth=number(variant.settings?.text_reference_width,originalWidth,144,3840,'글씨 기준 가로');
   return { ...format, width, height, textScale:width/referenceWidth, fps, duration, scenes, audio, music, needsAudio, warnings, preview: Boolean(preview), videoBitsPerSecond, realtime: true };
@@ -255,6 +286,37 @@ async function seek(media, time, signal, label) {
   if (Math.abs(media.currentTime - target) < .0001 && media.readyState >= 2 && !media.seeking) return;
   await eventReady(media, ['seeked', 'loadeddata', 'canplay'], { signal, label, ready: () => !media.seeking && media.readyState >= 2 && Math.abs(media.currentTime - target) < .05,
     trigger: () => { media.currentTime = target; } });
+}
+
+/**
+ * Start the native decoder before its recording deadline, silently, then restore
+ * the exact source trim. Preparation time never advances the output timeline.
+ * The caller still has to detect stalls during the later, recorded playback.
+ */
+export async function primeBrowserPlayback(media, { start = 0, signal = new AbortController().signal, label = '원본' } = {}) {
+  const wasMuted = media.muted; const startedAt = performance.now();
+  let pending; let completed = false;
+  try {
+    check(signal); media.muted = true;
+    await seek(media, start, signal, label);
+    pending = Promise.resolve(media.play());
+    await bounded(pending, signal, `${label} 재생 준비`, 15000);
+    check(signal);
+    if (media.paused || media.readyState < 2) fail(`${label}의 재생 준비를 마치지 못했습니다. 다른 파일이나 짧은 구간으로 다시 시도하세요.`, 'PLAYBACK_PREPARE_FAILED', { paused: media.paused, readyState: media.readyState, currentTime: media.currentTime });
+    media.pause();
+    await seek(media, start, signal, label);
+    check(signal); completed = true;
+    return { warmupMs: performance.now() - startedAt };
+  } catch (error) {
+    if (error?.name === 'NotAllowedError') fail('브라우저가 미디어 재생을 막았습니다. 노른 화면에서 생성 버튼을 직접 눌러 다시 시도하세요.', 'PLAYBACK_BLOCKED', { phase: 'preparing', paused: media.paused, readyState: media.readyState });
+    throw error;
+  } finally {
+    media.pause();
+    // A delayed native play must not restart a cancelled/disposed source.
+    // Keep it muted until that late promise settles, including its first samples.
+    if (!completed && pending) pending.then(() => { media.pause(); media.muted = wasMuted; }, () => { media.muted = wasMuted; });
+    else media.muted = wasMuted;
+  }
 }
 function mediaURL(source, ownedURLs) {
   const blob = source.file instanceof Blob ? source.file : source.blob instanceof Blob ? source.blob : null;
@@ -394,7 +456,7 @@ export async function renderInBrowser({ variant, media, signal: externalSignal, 
   const ownedURLs = new Set(); const resources = new Map(); const warningSet = new Set(plan.warnings);
   let audioContext; let audioDestination; let compressor; let musicResource; let output; let stream; let recorder; let host;
   let stopResolve; let stopReject; let recordingStarted = 0; let totalBytes = 0; let chunks = []; let timeout;
-  let lastReported = -Infinity; let cleaned = false;
+  let lastReported = -Infinity; let cleaned = false; let stopRequested = false;
   const progress = (stage, percent, detail, elapsed = 0) => {
     // Reporting is a UI concern. A listener exception must not leave media running.
     try { onProgress({ stage, percent: clamp(percent, 0, 100), detail, elapsed, duration: plan.duration }); } catch { /* ignored */ }
@@ -417,7 +479,8 @@ export async function renderInBrowser({ variant, media, signal: externalSignal, 
   const sourceElement = (source, kind, label) => {
     const element = document.createElement(kind); const url = mediaURL(source, ownedURLs);
     const errorHandler = () => control.abort(new BrowserRenderError(`${label}을 재생하지 못했습니다. 다른 파일을 선택하세요.`, 'DECODE_ERROR'));
-    const resource = { element, ownedURL: ownedURLs.has(url) ? url : null, errorHandler, ready: false, started: false };
+    const resource = { element, ownedURL: ownedURLs.has(url) ? url : null, errorHandler, ready: false, started: false, playState: 'idle', playStartedAt: null, warmupMs: 0 };
+    element.dataset.nornRenderSource = kind;
     if (/^https?:/.test(url)) element.crossOrigin = 'anonymous';
     element.addEventListener('error', errorHandler);
     if (kind !== 'img') { element.preload = 'auto'; element.playsInline = true; element.setAttribute('playsinline', ''); }
@@ -442,7 +505,7 @@ export async function renderInBrowser({ variant, media, signal: externalSignal, 
         if ('preservesPitch' in resource.element) resource.element.preservesPitch = true;
         else if ('webkitPreservesPitch' in resource.element) resource.element.webkitPreservesPitch = true;
         else if (entry.keepAudio && entry.speed !== 1) fail(`${label}: 이 브라우저는 배속 원음의 음높이를 유지할 수 없습니다. 원음을 끄거나 1배속을 선택하세요.`, 'PITCH_UNAVAILABLE');
-        await seek(resource.element, entry.sourceStart, signal, label);
+        Object.assign(resource, await primeBrowserPlayback(resource.element, { start: entry.sourceStart, signal, label }));
         if (entry.keepAudio) attachAudio(resource);
       } else {
         await eventReady(resource.element, ['load'], { signal, label, ready: () => resource.element.complete && resource.element.naturalWidth > 0,
@@ -462,19 +525,38 @@ export async function renderInBrowser({ variant, media, signal: externalSignal, 
   };
   const play = (resource, label) => {
     if (resource.started) return;
-    resource.started = true;
+    resource.started = true; resource.playState = 'pending'; resource.playStartedAt = performance.now();
     try {
       const promise = resource.element.play();
-      resource.playPromise = bounded(Promise.resolve(promise), signal, `${label} 재생`, 10000).catch(error => {
-        if (!signal.aborted) control.abort(error?.name === 'NotAllowedError' ? new BrowserRenderError('브라우저가 미디어 재생을 막았습니다. 노른 화면에서 생성 버튼을 직접 눌러 다시 시도하세요.', 'PLAYBACK_BLOCKED') : error);
+      const pending = Promise.resolve(promise);
+      // A late native start after cancellation must not leave hidden media playing.
+      pending.then(() => { if (signal.aborted || resource.disposed) resource.element.pause(); }, () => {});
+      resource.playPromise = bounded(pending, signal, `${label} 재생`, 10000).then(() => {
+        check(signal);
+        if (resource.disposed) return;
+        resource.playState = 'playing'; resource.playResolvedAt = performance.now();
+      }).catch(error => {
+        resource.playState = 'rejected';
+        const details = { playState: resource.playState, playElapsedMs: performance.now() - resource.playStartedAt, paused: resource.element.paused, readyState: resource.element.readyState, currentTime: resource.element.currentTime };
+        if (!signal.aborted) control.abort(error?.name === 'NotAllowedError'
+          ? new BrowserRenderError('브라우저가 미디어 재생을 막았습니다. 노른 화면에서 생성 버튼을 직접 눌러 다시 시도하세요.', 'PLAYBACK_BLOCKED', details)
+          : new BrowserRenderError('원본의 재생을 시작하지 못했습니다. 다른 파일이나 짧은 구간으로 다시 생성하세요.', 'PLAYBACK_FAILED', details));
         throw error;
       });
       resource.playPromise.catch(() => {});
-    } catch (error) { control.abort(error); }
+    } catch (error) { resource.playState = 'rejected'; control.abort(error); }
   };
+  const playbackDetails = (resource, entry, layer, now) => ({
+    scene: entry.index + 1, playState: resource?.playState || 'idle',
+    playElapsedMs: resource?.playStartedAt == null ? 0 : now - resource.playStartedAt,
+    warmupMs: resource?.warmupMs || 0, currentTime: resource?.element.currentTime ?? null,
+    expectedTime: layer.sourceTime, driftSeconds: resource ? Math.abs(resource.element.currentTime - layer.sourceTime) / entry.speed : null,
+    localTime: layer.localTime, duration: entry.duration, speed: entry.speed,
+    paused: resource?.element.paused ?? null, readyState: resource?.element.readyState ?? null, ended: resource?.element.ended ?? false,
+  });
   try {
     check(signal); stopForBackground(); check(signal);
-    timeout = setTimeout(() => control.abort(new BrowserRenderError('영상 생성 제한 시간을 초과했습니다. 해상도·FPS를 낮춰 다시 생성하세요.', 'RENDER_TIMEOUT')), (plan.duration + 90) * 1500);
+    timeout = setTimeout(() => control.abort(new BrowserRenderError('영상 생성 제한 시간을 초과했습니다. 출력 화질을 480p로 낮추거나 짧은 구간으로 다시 생성하세요.', 'RENDER_TIMEOUT')), (plan.duration + 90) * 1500);
     progress('preparing', 0, '선택한 원본과 글씨를 준비합니다.');
     host = document.createElement('div'); host.setAttribute('aria-hidden', 'true');
     Object.assign(host.style, { position: 'fixed', left: '-100000px', top: '0', width: '2px', height: '2px', overflow: 'hidden', pointerEvents: 'none' }); document.body.append(host);
@@ -500,7 +582,8 @@ export async function renderInBrowser({ variant, media, signal: externalSignal, 
         trigger: () => { musicResource.element.src = musicResource.url; musicResource.element.load(); } });
       if (!Number.isFinite(musicResource.element.duration) || plan.audio.music_start >= musicResource.element.duration) fail('음악 시작점이 실제 음악 길이를 넘습니다.', 'MUSIC_BOUNDS');
       musicResource.element.loop = plan.audio.loop;
-      await seek(musicResource.element, plan.audio.music_start, signal, '배경음악'); attachAudio(musicResource); musicResource.ready = true;
+      Object.assign(musicResource, await primeBrowserPlayback(musicResource.element, { start: plan.audio.music_start, signal, label: '배경음악' }));
+      attachAudio(musicResource); musicResource.ready = true;
     }
     check(signal);
     composite(output.context, [{ index: 0 }], null, resources, plan.width, plan.height);
@@ -508,63 +591,88 @@ export async function renderInBrowser({ variant, media, signal: externalSignal, 
     if (audioDestination) audioDestination.stream.getAudioTracks().forEach(track => stream.addTrack(track));
     const options = { mimeType: plan.mimeType, videoBitsPerSecond: plan.videoBitsPerSecond };
     if (audioDestination) options.audioBitsPerSecond = 160000;
-    try { recorder = new MediaRecorder(stream, options); } catch (error) { fail(`이 기기에서 ${plan.label} 인코더를 시작할 수 없습니다. 해상도·FPS를 낮춰 다시 생성하세요.`, 'ENCODER_UNAVAILABLE'); }
+    try { recorder = new MediaRecorder(stream, options); } catch (error) { fail(`이 기기에서 ${plan.label} 인코더를 시작할 수 없습니다. 출력 화질을 480p로 낮춰 다시 생성하세요.`, 'ENCODER_UNAVAILABLE'); }
     const actualFormat = browserFormat(recorder.mimeType || plan.mimeType);
     const stopped = new Promise((resolve, reject) => { stopResolve = resolve; stopReject = reject; }); stopped.catch(() => {});
     recorder.ondataavailable = event => {
       if (!event.data?.size || signal.aborted) return;
       totalBytes += event.data.size;
-      if (totalBytes > BROWSER_RENDER_LIMITS.maxOutputBytes) { control.abort(new BrowserRenderError('영상 파일이 512MB를 넘어 생성을 중단했습니다. 해상도·FPS를 낮추거나 짧게 나누세요.', 'OUTPUT_SIZE_LIMIT')); return; }
+      if (totalBytes > BROWSER_RENDER_LIMITS.maxOutputBytes) { control.abort(new BrowserRenderError('영상 파일이 512MB를 넘어 생성을 중단했습니다. 출력 화질을 480p로 낮추거나 짧게 나누세요.', 'OUTPUT_SIZE_LIMIT')); return; }
       chunks.push(event.data);
     };
     recorder.onerror = event => { const error = new BrowserRenderError(event.error?.message || '브라우저 영상 인코더 오류로 중단했습니다.', 'ENCODER_ERROR'); stopReject(error); control.abort(error); };
-    recorder.onstop = () => stopResolve();
+    recorder.onstop = () => {
+      if (!stopRequested && !signal.aborted) {
+        const error = new BrowserRenderError('영상 인코더가 완료 전에 멈췄습니다. 짧은 구간으로 다시 생성하세요.', 'ENCODER_STOPPED', { recorderState: recorder.state, elapsedSeconds: recordingStarted ? (performance.now() - recordingStarted) / 1000 : 0, expectedDuration: plan.duration });
+        stopReject(error); control.abort(error);
+      } else stopResolve();
+    };
     await eventReady(recorder, ['start'], { signal, label: '영상 인코더', ready: () => recorder.state === 'recording', trigger: () => recorder.start(1000) });
     recordingStarted = performance.now(); const audioStarted = audioContext?.currentTime;
-    let previousFrame = recordingStarted; let elapsed = 0;
+    const pacer = createBrowserFramePacer(plan.fps, recordingStarted);
+    let elapsed = 0;
     progress('encoding', 5, '이 화면을 유지하세요. 영상 길이만큼 시간이 걸립니다.');
     while (elapsed < plan.duration) {
       check(signal);
       const now = performance.now(); elapsed = (now - recordingStarted) / 1000;
-      if (now - previousFrame > 500) fail(PERFORMANCE_MESSAGE, 'FRAME_STALL');
-      previousFrame = now;
+      const frame = sampleBrowserTimeline(plan, elapsed);
+      const diagnostics = { elapsedSeconds: elapsed, width: plan.width, height: plan.height, fps: plan.fps, mimeType: recorder.mimeType || plan.mimeType, visibilityState: document.visibilityState,
+        playback: frame.layers.filter(layer => plan.scenes[layer.index].source.kind === 'video').map(layer => playbackDetails(resources.get(layer.index), plan.scenes[layer.index], layer, now)) };
+      if (recorder.state !== 'recording') fail('영상 인코더가 완료 전에 멈췄습니다. 짧은 구간으로 다시 생성하세요.', 'ENCODER_STOPPED', { ...diagnostics, recorderState: recorder.state, expectedDuration: plan.duration });
+      const tick = pacer.tick(now, diagnostics);
       if (audioContext && (audioContext.state !== 'running' || Math.abs(audioContext.currentTime - audioStarted - elapsed) > .3)) fail('오디오 재생이 중단되어 영상 생성을 멈췄습니다. 화면 잠금을 풀고 다시 생성하세요.', 'AUDIO_INTERRUPTED');
-      if (elapsed >= plan.duration) break;
-      const frame = sampleBrowserTimeline(plan, elapsed); const active = new Set(frame.layers.map(layer => layer.index));
+      if (elapsed >= plan.duration) {
+        // A short final clip must not become a "successful" still frame while its
+        // actual play promise is pending. Confirm startup even below 350 ms.
+        for (const layer of frame.layers) {
+          const entry = plan.scenes[layer.index]; const resource = resources.get(layer.index);
+          if (entry.source.kind === 'video') validateBrowserPlayback({ ...diagnostics, ...playbackDetails(resource, entry, layer, now), frameIntervalMs: tick.frameIntervalMs }, { requireStarted: true });
+        }
+        if (musicResource && musicResource.playState !== 'playing') fail('배경음악의 재생을 시작하지 못해 생성을 중단했습니다.', 'MUSIC_START_DELAY', { playState: musicResource.playState, playElapsedMs: now - musicResource.playStartedAt, paused: musicResource.element.paused, readyState: musicResource.element.readyState });
+        break;
+      }
+      const active = new Set(frame.layers.map(layer => layer.index));
       const last = frame.layers.at(-1)?.index ?? 0;
       // Preparing ahead is asynchronous. If a source misses its actual boundary,
       // abort rather than insert a black/frozen frame or alter the planned timing.
       prepare(last + 1); prepare(last + 2);
       for (const [index, resource] of resources) {
-        if (index < frame.layers[0].index) { dispose(resource); resources.delete(index); }
+        if (index < frame.layers[0].index) {
+          const entry = plan.scenes[index];
+          if (entry.source.kind === 'video') validateBrowserPlayback({ ...diagnostics, ...playbackDetails(resource, entry, { localTime: entry.duration, sourceTime: entry.sourceStart + entry.duration * entry.speed }, now), frameIntervalMs: tick.frameIntervalMs }, { requireStarted: true });
+          dispose(resource); resources.delete(index);
+        }
         else if (!active.has(index) && resource.gain) resource.gain.gain.setValueAtTime(0, audioContext.currentTime);
       }
       for (const layer of frame.layers) {
         const entry = plan.scenes[layer.index]; const resource = resources.get(layer.index);
-        if (!resource?.ready) fail(`${layer.index + 1}번 장면을 제시간에 준비하지 못해 중단했습니다. 해상도·FPS를 낮추거나 원본을 짧게 나누어주세요.`, 'SOURCE_NOT_READY');
+        if (!resource?.ready) fail(`${layer.index + 1}번 장면을 제시간에 준비하지 못해 중단했습니다. 출력 화질을 480p로 낮추거나 원본을 짧게 나누어주세요.`, 'SOURCE_NOT_READY');
         if (entry.source.kind === 'video') {
           play(resource, `${layer.index + 1}번 원본`);
-          if (layer.localTime > .35 && Math.abs(resource.element.currentTime - layer.sourceTime) / entry.speed > .35) fail(PERFORMANCE_MESSAGE, 'VIDEO_DESYNC');
-          if (resource.element.ended && layer.localTime < entry.duration - .1) fail(`${layer.index + 1}번 영상 재생이 예상보다 일찍 끝났습니다. 원본 구간을 다시 확인하세요.`, 'SOURCE_ENDED');
+          validateBrowserPlayback({ ...diagnostics, ...playbackDetails(resource, entry, layer, now), frameIntervalMs: tick.frameIntervalMs });
         }
         if (resource.gain) resource.gain.gain.setValueAtTime(layer.audioGain * plan.audio.original_volume, audioContext.currentTime);
-        drawScene(resource, entry, layer.localTime, plan.width, plan.height);
+        if (tick.draw) drawScene(resource, entry, layer.localTime, plan.width, plan.height);
       }
       if (musicResource) {
         play(musicResource, '배경음악');
+        if (musicResource.playState === 'pending' && now - musicResource.playStartedAt > 350) fail('배경음악의 재생 시작이 지연되어 생성을 중단했습니다.', 'MUSIC_START_DELAY', { playState: musicResource.playState, playElapsedMs: now - musicResource.playStartedAt, paused: musicResource.element.paused, readyState: musicResource.element.readyState, maxPlayStartMs: 350 });
         const fadeIn = Math.min(plan.audio.fade_in, plan.duration / 2); const fadeOut = Math.min(plan.audio.fade_out, plan.duration / 2);
         const volume = plan.audio.music_volume * Math.min(1, fadeIn ? elapsed / fadeIn : 1, fadeOut ? Math.max(0, plan.duration - elapsed) / fadeOut : 1);
         musicResource.gain.gain.setValueAtTime(volume, audioContext.currentTime);
       }
-      composite(output.context, frame.layers, frame.transition, resources, plan.width, plan.height);
+      if (tick.draw) composite(output.context, frame.layers, frame.transition, resources, plan.width, plan.height);
       if (now - lastReported > 200) { progress('encoding', 5 + elapsed / plan.duration * 89, `${Math.min(plan.scenes.length, last + 1)} / ${plan.scenes.length} 장면 · ${elapsed.toFixed(1)} / ${plan.duration.toFixed(1)}초`, elapsed); lastReported = now; }
       await nextFrame(signal);
     }
     check(signal);
     for (const resource of resources.values()) resource.element.pause?.(); musicResource?.element.pause();
+    // Stop recording before any UI callback can hold the final still frame longer.
+    if (recorder.state !== 'recording') fail('영상 인코더가 완료 전에 멈췄습니다. 짧은 구간으로 다시 생성하세요.', 'ENCODER_STOPPED', { recorderState: recorder.state, elapsedSeconds: (performance.now() - recordingStarted) / 1000, expectedDuration: plan.duration });
+    stopRequested = true;
+    recorder.stop();
     const recordedDuration = (performance.now() - recordingStarted) / 1000;
     progress('finalizing', 96, '완성된 영상을 파일로 묶습니다.', plan.duration);
-    if (recorder.state !== 'inactive') recorder.stop();
     await bounded(stopped, signal, '영상 파일 마무리', 20000);
     check(signal);
     if (!chunks.length || !totalBytes) fail('영상 파일이 생성되지 않았습니다. 해상도를 낮춰 다시 시도하세요.', 'EMPTY_OUTPUT');

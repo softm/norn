@@ -3,7 +3,9 @@
 Run in CI: python tests/ui-browser.py [output-directory]
 Requires Pillow, ffmpeg/ffprobe and Playwright Chromium. No engine process, OAuth,
 renderer mock or uploaded originals. Firebase is disabled only by a browser route.
-The exported video is about 4.5 seconds; the normal workflow should take <1 minute.
+The exported video is about 8.5 seconds. NORN_HEADED=1 uses a real headed browser
+(run with xvfb-run in CI). A test-only delay postpones one native source play;
+decoding, Web Audio, recording and output verification remain real.
 """
 import array
 import functools
@@ -33,6 +35,8 @@ REPORT = {"status": "failed", "checks": [], "pageErrors": [], "consoleErrors": [
           "failedResponses": [], "engineRequests": [], "unexpectedRequests": [],
           "consoleWarnings": [], "scope": "real browser + public static server; test-only Firebase disabled"}
 STARTED = time.monotonic()
+HEADED = os.environ.get("NORN_HEADED") == "1"
+REPORT["headed"] = HEADED
 
 
 def command(args, timeout=12):
@@ -50,11 +54,11 @@ def fixture(source):
     (source / "nested").mkdir(parents=True)
     for path, color in [(source / "01-photo.jpg", (210, 90, 45)),
                         (source / "nested/03-photo.png", (35, 90, 200))]:
-        photo = Image.new("RGB", (320, 240), color)
-        ImageDraw.Draw(photo).rectangle((25, 25, 95, 95), fill=(235, 235, 120))
+        photo = Image.new("RGB", (640, 480), color)
+        ImageDraw.Draw(photo).rectangle((50, 50, 190, 190), fill=(235, 235, 120))
         photo.save(path)
     command(["ffmpeg", "-nostdin", "-v", "error", "-y", "-f", "lavfi", "-i",
-             "testsrc2=size=320x240:rate=100", "-f", "lavfi", "-i",
+             "testsrc2=size=640x480:rate=100", "-f", "lavfi", "-i",
              "sine=frequency=880:sample_rate=48000", "-t", "2.51", "-c:v", "libx264",
              "-preset", "ultrafast", "-threads", "1", "-pix_fmt", "yuv420p",
              "-c:a", "aac", "-movflags", "+faststart", str(source / "02-video.mp4")])
@@ -152,7 +156,36 @@ def download(page, selector, name=None):
     return target
 
 
-def inspect_video(path, expected):
+def delay_next_video_start(page, milliseconds=600):
+    # Delay the actual native call, not just its returned Promise. The old renderer
+    # started this video at its timeline boundary and drifted/failed before 600ms.
+    # Prepared playback must absorb this latency before recording starts.
+    page.evaluate("""milliseconds => {
+      const nativePlay = HTMLMediaElement.prototype.play;
+      const state = window.__nornPlaybackDelay = {
+        requestedMs: milliseconds, applied: 0, actualMs: null, nativeCalls: 0, resolved: false
+      };
+      HTMLMediaElement.prototype.play = function (...args) {
+        const source = this instanceof HTMLVideoElement && this.dataset.nornRenderSource === 'video';
+        if (!source) return nativePlay.apply(this, args);
+        if (state.applied) { state.nativeCalls++; return nativePlay.apply(this, args); }
+        state.applied++;
+        const element = this, started = performance.now();
+        return new Promise((resolve, reject) => setTimeout(() => {
+          state.actualMs = performance.now() - started;
+          state.nativeCalls++;
+          try {
+            Promise.resolve(nativePlay.apply(element, args)).then(value => {
+              state.resolved = true;
+              resolve(value);
+            }, reject);
+          } catch (error) { reject(error); }
+        }, milliseconds));
+      };
+    }""", milliseconds)
+
+
+def inspect_video(path, expected, video_start, video_duration):
     probe = json.loads(command(["ffprobe", "-v", "error", "-show_format", "-show_streams",
                                 "-show_packets", "-of", "json", str(path)]))
     container = probe["format"]["format_name"].split(",")
@@ -175,6 +208,17 @@ def inspect_video(path, expected):
     assert pcm, "Audio stream decoded no samples"
     rms = math.sqrt(sum(value * value for value in pcm) / len(pcm))
     assert rms > 100, f"Expected audible source audio, got RMS={rms}"
+    def window_rms(start, end):
+        samples = pcm[round(start * 8000):round(end * 8000)]
+        assert samples, (start, end, len(pcm))
+        return math.sqrt(sum(value * value for value in samples) / len(samples))
+    # A widened drift guard must not pass with the first 600ms of video/audio lost.
+    # The preceding/following stills have no soundtrack; only the video is audible.
+    early_audio = window_rms(video_start + .15, video_start + .45)
+    before_audio = window_rms(video_start - .45, video_start - .15)
+    after_audio = window_rms(video_start + video_duration + .15, video_start + video_duration + .45)
+    assert early_audio > 100, f"Video audio starts late after delayed play: RMS={early_audio}"
+    assert max(before_audio, after_audio) < max(100, early_audio * .08), (before_audio, early_audio, after_audio)
     frames = command(["ffmpeg", "-nostdin", "-v", "error", "-i", str(path), "-an", "-vf",
                       "fps=1,scale=48:48", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"])
     size = 48 * 48 * 3
@@ -184,7 +228,9 @@ def inspect_video(path, expected):
     assert difference > 12, f"Expected distinct photo/video frames, difference={difference}"
     return {"container": container, "videoCodec": video["codec_name"], "audioCodec": audio["codec_name"],
             "width": video["width"], "height": video["height"], "duration": duration,
-            "expectedDuration": expected, "audioRms": round(rms, 2), "frameDifference": round(difference, 2)}
+            "expectedDuration": expected, "audioRms": round(rms, 2), "frameDifference": round(difference, 2),
+            "videoStart": video_start, "earlyVideoAudioRms": round(early_audio, 2),
+            "precedingStillAudioRms": round(before_audio, 2), "followingStillAudioRms": round(after_audio, 2)}
 
 
 server = None
@@ -199,7 +245,7 @@ try:
         base = f"http://127.0.0.1:{server.server_port}"
         with sync_playwright() as playwright:
             launch = {"executable_path": os.environ["NORN_CHROMIUM"]} if os.environ.get("NORN_CHROMIUM") else {}
-            browser = playwright.chromium.launch(headless=True, **launch)
+            browser = playwright.chromium.launch(headless=not HEADED, **launch)
             context = browser.new_context(viewport={"width": 1440, "height": 1000}, accept_downloads=True)
             watch(context, base)
             page = context.new_page()
@@ -222,7 +268,7 @@ try:
                 page.locator(".clip").nth(0).click()
                 fill(page, "#scene-title", "로컬 자료로 만든 영상")
                 fill(page, "#scene-caption", "사진·영상·원음을 직접 편집했습니다.")
-                fill(page, '[data-bind="duration"]', "1")
+                fill(page, '[data-bind="duration"]', "3")
                 page.locator(".clip").nth(1).click()
                 reveal(page, '[data-bind="keep_audio"]').check()
                 reveal(page, "#mute-all").uncheck()
@@ -230,17 +276,22 @@ try:
                 assert page.locator('#music option:not([value=""])').count() == 1
                 assert page.locator("#music").input_value() == ""  # Prove audio comes from the video.
                 page.locator(".clip").nth(2).click()
-                fill(page, '[data-bind="duration"]', "1")
+                fill(page, '[data-bind="duration"]', "3")
                 page.locator("[data-action=moveleft]").click()
                 page.locator("[data-action=moveleft]").click()
                 assert "03-photo" in page.locator(".clip-top").first.inner_text()
+                page.locator(".clip").nth(2).click()
+                page.locator("[data-action=moveleft]").click()
+                assert "02-video" in page.locator(".clip-top").nth(1).inner_text()
                 saved = download(page, "[data-action=save]", "project.json")
                 snapshot = json.loads(saved.read_text(encoding="utf-8"))
                 variant = active(snapshot)
-                assert variant["scenes"][1]["caption"] == "사진·영상·원음을 직접 편집했습니다."
-                assert variant["scenes"][2]["keep_audio"] and not variant["audio"]["mute_original"]
+                assert variant["scenes"][2]["caption"] == "사진·영상·원음을 직접 편집했습니다."
+                assert variant["scenes"][1]["keep_audio"] and not variant["audio"]["mute_original"]
                 expected = sum(row["duration"] for row in variant["scenes"])
-                assert 4.45 <= expected <= 4.60, expected
+                assert 8.45 <= expected <= 8.60, expected
+                REPORT["fixture"] = {"sourceWidth": 640, "sourceHeight": 480,
+                                     "sceneDurations": [row["duration"] for row in variant["scenes"]]}
                 assert "blob:" not in saved.read_text(encoding="utf-8")
                 page.screenshot(path=str(OUT / "edited.png"), full_page=True)
                 REPORT["checks"].append("scene order, caption, fractional video duration and source-audio settings persist to JSON")
@@ -252,14 +303,19 @@ try:
                 page.wait_for_function("document.querySelector('#progress .label')?.textContent.includes('중지됨')")
                 idle(page)
                 assert page.locator("#browser-result-player").count() == 0
+                delay_next_video_start(page)
                 page.locator("[data-action=render]").click()
                 page.locator("[data-action=start-browser-export]").click()
-                page.wait_for_function("document.querySelector('#browser-result-player') || document.querySelector('.error-box')", timeout=20000)
+                page.wait_for_function("document.querySelector('#browser-result-player') || document.querySelector('.error-box') || document.querySelector('#progress .error')", timeout=25000)
                 assert page.locator("#browser-result-player").count() == 1, page.locator("body").inner_text()[-2000:]
+                REPORT["playbackDelay"] = page.evaluate("window.__nornPlaybackDelay")
+                delay = REPORT["playbackDelay"]
+                assert delay["applied"] == 1 and delay["resolved"] and delay["actualMs"] >= 550, delay
                 video_path = download(page, "[data-action=download-video]")
-                REPORT["video"] = inspect_video(video_path, expected)
+                REPORT["video"] = inspect_video(video_path, expected, variant["scenes"][0]["duration"], variant["scenes"][1]["duration"])
                 page.screenshot(path=str(OUT / "completed.png"), full_page=True)
                 REPORT["checks"].append("real export cancellation and retry; downloaded container, dimensions, timing, audio and changing frames verified")
+                REPORT["checks"].append("600ms native video-start delay is absorbed before recording; original audio starts at its planned scene boundary")
 
                 page.locator(".modal [data-action=posting]").click()
                 page.locator("#public-note").fill("공개할 짧은 소개")
@@ -307,6 +363,13 @@ try:
                 REPORT["status"] = "passed"
             except Exception:
                 try:
+                    REPORT["playbackDelay"] = page.evaluate("window.__nornPlaybackDelay || null")
+                    if page.locator("#progress").count():
+                        REPORT["browserProgress"] = page.locator("#progress").inner_text()
+                    if page.locator("#progress .error").count() and not page.locator(".modal").count():
+                        page.locator("#progress [data-action=log]").click(timeout=1500)
+                    if page.locator("#browser-error-details").count():
+                        REPORT["rendererErrorDetails"] = page.locator("#browser-error-details").inner_text()
                     page.screenshot(path=str(OUT / "failure.png"), full_page=True, timeout=3000)
                 except Exception:
                     pass

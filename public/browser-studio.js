@@ -99,7 +99,7 @@ export function installBrowserStudio(C) {
     assertIdle();modal('내 자료로 시작하기',`<p>사진·영상·음악을 선택하면 이 브라우저에서 바로 편집합니다.</p><div class="source-choices">${button('addfiles','사진·영상 선택','primary')}${button('addfolder','폴더 선택')}${button('relink-files','원본 다시 연결')}${button('import','편집 JSON 열기')}</div><p class="tiny">파일이나 폴더를 화면에 끌어놓아도 됩니다. 새로고침 후에는 같은 원본을 다시 선택하세요.</p><details class="advanced-tools"><summary>고급 도구</summary><p class="tiny">기존 Python·FFmpeg 작업이나 Ollama 분석을 사용할 때만 선택하세요.</p>${button('advanced-engine','고급 엔진 연결')}${state().engine?button('browser-mode','브라우저 편집으로 돌아가기'):''}<a class="tiny" href="./setup.html" target="_blank" rel="noopener">계정 연결 진단 ↗</a></details>`);
   }
   function renderVariant(v,quality){
-    const clone=D.clone(v);const edge=quality==='1080'?1920:1280;
+    const clone=D.clone(v);const edge=({'480':854,'720':1280,'1080':1920})[quality]||1280;
     const scale=Math.min(1,edge/Math.max(clone.settings.width,clone.settings.height));
     clone.settings={...clone.settings,text_reference_width:v.settings.width,width:Math.round(clone.settings.width*scale/2)*2,height:Math.round(clone.settings.height*scale/2)*2};
     return clone;
@@ -111,7 +111,7 @@ export function installBrowserStudio(C) {
     if(!variants.length)throw Error('장면을 먼저 추가하세요.');
     for(const v of variants)validateBrowserRender(renderVariant(v,'720'),state().media);
     exportChoice={ids:variants.map(v=>v.id)};
-    modal(all?'전체 버전 영상 굽기':'영상 굽기',`<p>${all?variants.length+'개 버전을 차례로':esc(variant().name)+'을'} 이 브라우저에서 만듭니다.</p><div class="export-facts"><span>저장 형식 <strong>${esc(info.label)}</strong></span><span>총 영상 길이 <strong>${D.seconds(variants.reduce((sum,v)=>sum+D.duration(v),0))}</strong></span></div><label>출력 화질<select id="browser-quality"><option value="720">720p · 가볍게 저장</option><option value="1080">1080p · 선명하게 저장</option></select></label><p class="tiny">최대 10분·120장면·0.25~4배속. 원본을 재생하며 합성하므로 영상 길이 정도의 시간이 걸립니다. 생성 중에는 이 화면을 유지하세요.</p>${info.extension==='webm'?'<p class="connection-banner">이 브라우저는 WebM으로 저장합니다. MP4 업로드만 받는 서비스에서는 MP4 저장을 지원하는 브라우저가 필요합니다.</p>':''}<div class="actions">${button('close','더 편집하기')}${button('start-browser-export','영상 생성 시작','primary')}</div>`);
+    modal(all?'전체 버전 영상 굽기':'영상 굽기',`<p>${all?variants.length+'개 버전을 차례로':esc(variant().name)+'을'} 이 브라우저에서 만듭니다.</p><div class="export-facts"><span>저장 형식 <strong>${esc(info.label)}</strong></span><span>총 영상 길이 <strong>${D.seconds(variants.reduce((sum,v)=>sum+D.duration(v),0))}</strong></span></div><label>출력 화질<select id="browser-quality"><option value="480">480p · 처리 부담 줄이기</option><option value="720" selected>720p · 기본 화질</option><option value="1080">1080p · 선명하게 저장</option></select></label><p class="tiny">최대 10분·120장면·0.25~4배속. 원본을 재생하며 합성하므로 영상 길이 정도의 시간이 걸립니다. 생성 중에는 이 화면을 유지하세요. 처리가 느리면 480p로 낮춰주세요.</p>${info.extension==='webm'?'<p class="connection-banner">이 브라우저는 WebM으로 저장합니다. MP4 업로드만 받는 서비스에서는 MP4 저장을 지원하는 브라우저가 필요합니다.</p>':''}<div class="actions">${button('close','더 편집하기')}${button('start-browser-export','영상 생성 시작','primary')}</div>`);
   }
   async function executeRender({preview=false,transition=false,all=false,quality='720'}={}){
     assertIdle();let selectedVariants;
@@ -144,7 +144,7 @@ export function installBrowserStudio(C) {
       setJob({status:'done',phase:'complete',stagePercent:100,detail:preview?'미리보기가 완성됐습니다.':`${completed}개 영상이 완성됐습니다. 다운로드해서 저장하세요.`,result:preview?null:{renderer:'browser'},batch:null});
       release();render();if(!preview)showResult();else $('#player')?.play().catch(()=>{});
     }catch(error){
-      setJob({status:error.name==='AbortError'?'cancelled':'error',detail:(error.name==='AbortError'?'영상 생성을 취소했습니다.':error.message)+(completed?` · 완료한 ${completed}개 영상은 결과 보관함에 유지합니다.`:''),stagePercent:null,batch:null,result:null});
+      setJob({status:error.name==='AbortError'?'cancelled':'error',detail:(error.name==='AbortError'?'영상 생성을 취소했습니다.':error.message)+(completed?` · 완료한 ${completed}개 영상은 결과 보관함에 유지합니다.`:''),errorDetails:error.name==='AbortError'?null:{...error.details,code:error.code||'BROWSER_RENDER'},stagePercent:null,batch:null,result:null});
       release();render();if(error.name!=='AbortError')C.modalError(error);
     }finally{release();}
   }
@@ -277,7 +277,7 @@ export function installBrowserStudio(C) {
     'start-browser-export':()=>executeRender({all:exportChoice?.ids.length>1,quality:$('#browser-quality')?.value||'720'}),
     'transition-preview':()=>localMode()?executeRender({preview:true,transition:true}):previous['transition-preview'](),
     cancel:()=>{if(controller){controller.abort();toast('작업을 취소하고 정리합니다.');}else return previous.cancel();},
-    log:()=>localMode()?modal('작업 상태',`<p>${esc(state().job.detail||'진행 중인 작업이 없습니다.')}</p>${lastImport?button('import-report','파일 불러오기 결과'):''}`):previous.log(),
+    log:()=>localMode()?modal('작업 상태',`<p>${esc(state().job.detail||'진행 중인 작업이 없습니다.')}</p>${state().job.errorDetails?'<details><summary>상세 진단</summary><pre id="browser-error-details">'+esc(JSON.stringify(state().job.errorDetails,null,2))+'</pre></details>':''}${lastImport?button('import-report','파일 불러오기 결과'):''}`):previous.log(),
     result:()=>localMode()?showResult():previous.result(),
     'download-video':()=>{const result=resultForCurrent();downloadBlob(result.fileName,result.blob);result.saved=true;},
     'download-package':()=>savePackage(true),'save-results-folder':saveToFolder,
