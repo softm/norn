@@ -17,7 +17,7 @@ for(const name of ['index.html','setup.html']){
 test('root entry contains the application DOM and loads its actual module',async()=>{
   const entry=await text('index.html');
   for(const id of ['app','modal-root','toast'])assert.ok(entry.includes(`id="${id}"`));
-  assert.match(entry,/<script type="module" src="\.\/public\/app\.js"><\/script>/);
+  assert.match(entry,/<script type="module" src="\.\/public\/browser-studio\.js"><\/script>/);
 });
 test('root diagnostic links stay at root',async()=>{
   const entry=await text('setup.html');

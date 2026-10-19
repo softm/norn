@@ -1,7 +1,7 @@
 name: NORN checks and Pages preview
 on:
   push:
-    branches: [main]
+    branches: [main, browser-first-20261019]
   workflow_dispatch:
 permissions:
   contents: read
@@ -25,11 +25,14 @@ jobs:
       - run: python -m unittest discover -s tests -p 'test_*.py' -v
       - run: python -m pip install playwright
       - run: python -m playwright install --with-deps chromium
-      - name: Verify root routes and editor in a real browser
+      - name: Verify root routes and native editor in a real browser
         run: |
           node scripts/build.mjs
           python tests/ui-root.py ui-results/root
-          python tests/ui-live.py ui-results
+          python tests/ui-live.py ui-results/native
+      - name: Verify browser-only FFmpeg video and no-upload workflow
+        run: python tests/ui-browser.py ui-results/browser
+        timeout-minutes: 10
       - uses: actions/upload-artifact@v4
         if: always()
         with:

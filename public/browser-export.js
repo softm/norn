@@ -1,0 +1,25 @@
+/** Text packages reference originals. ZIP optionally includes the newly generated MP4 once. */
+import {safeName,subtitles} from './browser-plan.js';
+import {cloudData,composePost,channelList} from './workspace.js';
+const escape=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const table=new Uint32Array(256);for(let n=0;n<256;n++){let c=n;for(let k=0;k<8;k++)c=c&1?0xedb88320^(c>>>1):c>>>1;table[n]=c>>>0;}
+async function crc(blob){let c=0xffffffff;for(let p=0;p<blob.size;p+=2**20){const b=new Uint8Array(await blob.slice(p,p+2**20).arrayBuffer());for(const x of b)c=table[(c^x)&255]^(c>>>8);}return (c^0xffffffff)>>>0;}
+export async function zip(entries){const local=[],central=[],text=new TextEncoder();let offset=0,total=0;
+ for(const [path,value]of entries){if(path.split('/').some(p=>p==='..')||path.startsWith('/'))throw Error('잘못된 ZIP 경로');const name=text.encode(path),blob=value instanceof Blob?value:new Blob([value]),checksum=await crc(blob);if(blob.size>0xffffffff)throw Error('ZIP 파일 한도 초과');const header=new Uint8Array(30+name.length),h=new DataView(header.buffer);h.setUint32(0,0x04034b50,true);h.setUint16(4,20,true);h.setUint16(6,0x800,true);h.setUint32(14,checksum,true);h.setUint32(18,blob.size,true);h.setUint32(22,blob.size,true);h.setUint16(26,name.length,true);header.set(name,30);local.push(header,blob);
+ const directory=new Uint8Array(46+name.length),d=new DataView(directory.buffer);d.setUint32(0,0x02014b50,true);d.setUint16(4,20,true);d.setUint16(6,20,true);d.setUint16(8,0x800,true);d.setUint32(16,checksum,true);d.setUint32(20,blob.size,true);d.setUint32(24,blob.size,true);d.setUint16(28,name.length,true);d.setUint32(42,offset,true);directory.set(name,46);central.push(directory);offset+=header.length+blob.size;total+=directory.length;}
+ const end=new Uint8Array(22),e=new DataView(end.buffer);e.setUint32(0,0x06054b50,true);e.setUint16(8,entries.length,true);e.setUint16(10,entries.length,true);e.setUint32(12,total,true);e.setUint32(16,offset,true);return new Blob([...local,...central,end],{type:'application/zip'});
+}
+export function packageEntries(project,variant,library,result,includeVideo=false){const base=`generated/${safeName(variant.name)}-${variant.id.slice(0,8)}.mp4`,references=[];
+ for(const s of variant.scenes){const m=library.items.find(m=>m.id===s.source_id);references.push({scene:s.name,kind:m?.kind||'missing',relativePath:m?.relative_path||null,sha256:m?.sha256||null,note:'기존 원본에서 직접 첨부 · 이 ZIP에 원본 없음'});}
+ const entries=[['project.json',JSON.stringify(cloudData(project),null,2)],['original-references.json',JSON.stringify(references,null,2)],['README.txt','원본 사진·영상은 이 묶음에 복사하지 않습니다. 원본은 기존 위치에서 직접 첨부하세요. 생성 영상은 포함을 선택한 경우에만 generated/에 한 번 들어 있습니다. 원본 폴더 이름·파일명과 문구가 있으므로 공개 전에 확인하세요.\n']];
+ for(const [ch,label]of channelList)entries.push([`sns/${ch}.txt`,composePost(project,variant,ch)]);
+ if(result){entries.push(['subtitles.srt',subtitles(result.plan)]);if(includeVideo)entries.push([base,result.blob]);}
+ const items=references.map(r=>`<tr><td>${escape(r.scene)}</td><td>${escape(r.relativePath||'원본 다시 연결 필요')}</td><td>${escape(r.kind)}</td></tr>`).join('');
+ entries.push(['index.html',`<!doctype html><html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escape(project.title)} · 노른</title><style>body{max-width:960px;margin:30px auto;padding:20px;font:16px/1.7 system-ui;background:#1b2019;color:#f1eedb}video{width:100%;max-height:65vh}table{width:100%;border-collapse:collapse}td{border-bottom:1px solid #626952;padding:12px;overflow-wrap:anywhere}textarea{width:100%;min-height:120px}a{color:#ebc376}</style><h1>${escape(project.title)}</h1><p>${escape(project.publicNote||'')}</p>${includeVideo&&result?`<video controls playsinline src="${escape(base)}"></video>`:'<p>완성 MP4는 별도로 저장한 파일을 사용하세요.</p>'}<h2>원본 자료 · 복사하지 않음</h2><p>원본 파일은 선택했던 폴더에 그대로 있습니다. 아래는 첨부용 목록입니다.</p><table>${items}</table><h2>게시문</h2>${channelList.map(([ch,label])=>`<details><summary>${escape(label)}</summary><textarea readonly>${escape(composePost(project,variant,ch))}</textarea><a href="sns/${ch}.txt">TXT 열기</a></details>`).join('')}</html>`]);
+ return entries;
+}
+export function downloadBlob(name,blob){const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=name;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),60000);}
+export async function saveDirectory(parent,name,entries){const folder=await parent.getDirectoryHandle(safeName(name)+'업로드준비',{create:true});const run=await folder.getDirectoryHandle(new Date().toISOString().replace(/[:.]/g,'-'),{create:true});
+ for(const [path,data]of entries){let dir=run;const parts=path.split('/');for(const part of parts.slice(0,-1))dir=await dir.getDirectoryHandle(part,{create:true});const file=await dir.getFileHandle(parts.at(-1),{create:true}),stream=await file.createWritable();try{await stream.write(data instanceof Blob?data:new Blob([data]));await stream.close();}catch(e){await stream.abort().catch(()=>{});throw e;}}
+ return folder.name+'/'+run.name;
+}

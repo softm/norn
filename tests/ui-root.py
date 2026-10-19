@@ -1,6 +1,6 @@
-"""Actual browser checks for branch-root, legacy public/, and flat dist/ routes.
+"""Actual browser checks for branch-root, public/, and flat dist/ routes.
 Firebase config is fetched from its real path, then disabled only in the test browser.
-No production OAuth, user data, or engine render claims.
+No production OAuth or engine render claims.
 """
 import functools,json,threading
 from pathlib import Path
@@ -13,7 +13,6 @@ class Quiet(SimpleHTTPRequestHandler):
  def log_message(self,*args):pass
 
 def test_only_firebase_config(route):
- # Keep the path/HTTP check real: a missing file must not be hidden by the fixture.
  response=route.fetch()
  assert response.status==200, f'Firebase config path failed: {response.status}'
  data=response.json()
@@ -32,10 +31,10 @@ try:
    page.on('pageerror',lambda e:errs.append(str(e)))
    page.on('response',lambda r:bad.append([r.status,r.url]) if r.status>=400 else None)
    page.goto(base+path,wait_until='networkidle',timeout=15000)
-   page.locator('.hero h1').wait_for(timeout=5000)
+   page.locator('.browser-hero h1').wait_for(timeout=5000)
    assert page.url==base+path,page.url
-   page.locator('[data-action=enter]').last.click()
-   page.locator('.studio').wait_for();assert page.url==base+path+'#studio',page.url
+   page.locator('[data-action=demo]').last.click()
+   page.locator('.browser-studio').wait_for();assert page.url==base+path+'#studio',page.url
    page.locator('#scene-title').fill('루트 편집 테스트')
    assert page.locator('#scene-title').input_value()=='루트 편집 테스트'
    page.screenshot(path=str(out/(("root" if path=="/" else path.strip("/"))+'-studio.png')))
