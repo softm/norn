@@ -110,6 +110,7 @@ async function loadCloudProject(id,{notify=true}={}){
  if(!W.validId(id))throw Error('프로젝트 ID 오류');
  const p=await Cloud.loadCloud(id),revision=p.revision,matchedMedia=W.projectMedia(p,media),linked=W.relinkProject(p,matchedMedia);
  browserStudio?.resetProjectState?.();
+ browserStudio?.retainMedia?.(matchedMedia);
  media=matchedMedia;project=linked.project;project.revision=engineRevision||0;cloudRevision=revision;cloudEditVersion=0;selected=v().scenes[0]?.id||'';
  history=[];redo=[];previewUrl='';unsaved=false;page='studio';sessionStorage.setItem('norn.cloud.project',id);
  if(location.hash!=='#studio')window.history.replaceState(null,'','#studio');
