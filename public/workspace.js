@@ -7,6 +7,11 @@ export function validId(value){return typeof value==='string'&&idPattern.test(va
 export function analysisOptions(input={}){const number=(key,fallback,min,max)=>{const n=Number(input[key]??fallback);return Number.isFinite(n)?Math.min(max,Math.max(min,Math.floor(n))):fallback};return {imageLimit:number('imageLimit',100,1,600),frameSize:number('frameSize',640,256,960),maxScenes:number('maxScenes',12,1,120),seed:number('seed',0,0,999999),order:['concept','source','current'].includes(input.order)?input.order:'concept',scope:['folder','timeline'].includes(input.scope)?input.scope:'folder',fullVideo:Boolean(input.fullVideo)}}
 export function makeVariant(base,{mode='short',name='',width,height,targetDuration,empty=false}={}){const preset=modes[mode]||modes.short;const v=D.variantCopy(base,name.trim()||preset.label);v.mode=mode in modes?mode:'short';v.targetDuration=Number(targetDuration)||preset.seconds;v.settings={...v.settings,width:Number(width)||preset.width,height:Number(height)||preset.height};if(empty)v.scenes=[];return v}
 export function assetManifest(media){return media.filter(m=>['image','video','audio'].includes(m.kind)&&/^[a-f0-9]{64}$/.test(m.sha256||'')).map(m=>({id:m.id,sha256:m.sha256,kind:m.kind,size:m.size})).slice(0,600)}
+export function projectMedia(project,media){
+ const assets=project?.assets||[];
+ if(!assets.length)return [];
+ return media.filter(m=>assets.some(a=>m.id===a.id||(a.sha256&&m.sha256===a.sha256&&a.kind===m.kind&&a.size===m.size)));
+}
 export function relinkProject(project,media){const p=D.clone(project),byId=new Map(media.map(m=>[m.id,m])),old=new Map((p.assets||[]).map(m=>[m.id,m]));const map=new Map(),missing=[],ambiguous=[];
  for(const sid of new Set(p.variants.flatMap(v=>[...v.scenes.map(s=>s.source_id),v.audio?.music_id].filter(Boolean)))){if(byId.has(sid)){map.set(sid,sid);continue}const expected=old.get(sid);const matches=expected?media.filter(m=>m.sha256===expected.sha256&&m.kind===expected.kind&&m.size===expected.size):[];if(matches.length===1)map.set(sid,matches[0].id);else if(matches.length>1)ambiguous.push(sid);else missing.push(sid)}
  for(const v of p.variants){for(const s of v.scenes)if(map.has(s.source_id))s.source_id=map.get(s.source_id);if(map.has(v.audio?.music_id))v.audio.music_id=map.get(v.audio.music_id)}
