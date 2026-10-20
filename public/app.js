@@ -22,34 +22,38 @@ function toast(t,action){
  if(action){const button=document.createElement('button');button.className='small';button.dataset.action=action;button.textContent='되돌리기';box.append(button)}
  box.style.display='flex';toastTimer=setTimeout(()=>box.style.display='none',6000);
 }
-let cloudSyncTimer=null,cloudSyncBusy=false,cloudEditVersion=0;
-const waitCloudSync=async()=>{while(cloudSyncBusy)await new Promise(resolve=>setTimeout(resolve,50))};
-async function saveCloudCurrent(event='autosave'){
- if(!user)return null;
- await waitCloudSync();
- const syncProject=project.id,syncUser=user.uid,saveVersion=cloudEditVersion,status=$('#save-status');
- const linked=W.relinkProject(project,media).project;
- project.assets=linked.assets;
- cloudSyncBusy=true;
- if(status)status.textContent='Firebase 저장 중…';
- try{
-  const revision=await Cloud.saveCloud(project,cloudRevision,event);
-  if(user?.uid===syncUser&&project.id===syncProject){
-   cloudRevision=revision;
-   if(cloudEditVersion===saveVersion){
-    unsaved=false;
-    if(status)status.textContent='Firebase 저장됨';
-   }else{
-    unsaved=true;
-    if(status)status.textContent='변경됨 · Firebase 저장 대기';
-    scheduleCloudSync();
+let cloudSyncTimer=null,cloudEditVersion=0,cloudSaveQueue=Promise.resolve();
+const waitCloudSync=()=>cloudSaveQueue.catch(()=>{});
+function saveCloudCurrent(event='autosave'){
+ if(!user)return Promise.resolve(null);
+ const run=async()=>{
+  if(!user)return null;
+  const syncProject=project.id,syncUser=user.uid,saveVersion=cloudEditVersion,status=$('#save-status');
+  const linked=W.relinkProject(project,media).project;
+  project.assets=linked.assets;
+  if(status)status.textContent='Firebase 저장 중…';
+  try{
+   const revision=await Cloud.saveCloud(project,cloudRevision,event);
+   if(user?.uid===syncUser&&project.id===syncProject){
+    cloudRevision=revision;
+    if(cloudEditVersion===saveVersion){
+     unsaved=false;
+     if(status)status.textContent='Firebase 저장됨';
+    }else{
+     unsaved=true;
+     if(status)status.textContent='변경됨 · Firebase 저장 대기';
+     scheduleCloudSync();
+    }
    }
+   return revision;
+  }catch(err){
+   if(user?.uid===syncUser&&project.id===syncProject&&status)status.textContent='로컬 변경됨 · Firebase 확인 필요';
+   throw err;
   }
-  return revision;
- }catch(err){
-  if(user?.uid===syncUser&&project.id===syncProject&&status)status.textContent='로컬 변경됨 · Firebase 확인 필요';
-  throw err;
- }finally{cloudSyncBusy=false}
+ };
+ const result=cloudSaveQueue.then(run,run);
+ cloudSaveQueue=result.catch(()=>{});
+ return result;
 }
 function scheduleCloudSync(){
  clearTimeout(cloudSyncTimer);
@@ -193,8 +197,8 @@ const actions={home:()=>user?openWorkspace():(page='home',location.hash='',rende
  'project-open':async el=>loadCloudProject(el.dataset.id),
  'project-delete':async el=>{if(!confirm('이 프로젝트의 Firebase 편집 정보를 삭제할까요? 로컬 원본 파일은 삭제하지 않습니다.'))return;await Cloud.deleteCloud(el.dataset.id,Number(el.dataset.revision));if(sessionStorage.getItem('norn.cloud.project')===el.dataset.id)sessionStorage.removeItem('norn.cloud.project');await refreshWorkspace();toast('프로젝트를 삭제했습니다.')},
  'project-history':async el=>{const rows=await Cloud.listHistory(el.dataset.id),labels={autosave:'자동 저장',manual:'직접 저장',restore:'복원','quick-maker':'자동 제작',render:'영상 생성'};const body=rows.length?'<div class="project-history">'+rows.map(row=>'<div class="history-row"><span><strong>r'+row.revision+'</strong> · '+(labels[row.event]||'저장')+'</span><small>'+cloudTime(row.createdAt)+'</small></div>').join('')+'</div>':'<p>저장된 세부 이력이 없습니다.</p>';modal((el.dataset.title||'프로젝트')+' · 작업 이력',body)},
- login:async()=>{const btn=$('[data-action="login"]');if(btn)btn.disabled=true;const wasStudio=page==='studio',hadWork=hasCurrentWork();try{user=await Cloud.login();cloudRevision=0;close();if(wasStudio&&hadWork){cloudEditVersion++;unsaved=true;await saveCloudCurrent('manual');sessionStorage.setItem('norn.cloud.project',project.id);render();toast('Google 계정에 연결하고 현재 작업을 프로젝트로 저장했습니다.')}else{page='home';location.hash='';await refreshWorkspace(false);render();toast('워크스페이스를 열었습니다.')}}finally{if(btn)btn.disabled=false}},
- logout:async()=>{clearTimeout(cloudSyncTimer);await waitCloudSync();await Cloud.logout();user=null;cloudRevision=0;cloudEditVersion=0;engine=null;sessionStorage.removeItem('norn.engine');sessionStorage.removeItem('norn.cloud.project');browserStudio?.reset();project=emptyProject();media=[];selected='';close();render();toast('로그아웃했습니다. 내 파일을 선택해 계속 작업할 수 있습니다.')},
+ login:async()=>{const btn=$('[data-action="login"]');if(btn)btn.disabled=true;const wasStudio=page==='studio',hadWork=hasCurrentWork();try{user=await Cloud.login();cloudRevision=0;close();if(wasStudio&&hadWork){cloudEditVersion++;unsaved=true;let copied=false;try{await saveCloudCurrent('manual')}catch(e){if(!/충돌/.test(String(e?.message||e)))throw e;project.id=D.uid();cloudRevision=0;cloudEditVersion++;unsaved=true;await saveCloudCurrent('manual');copied=true}sessionStorage.setItem('norn.cloud.project',project.id);render();toast(copied?'기존 클라우드 프로젝트와 구분해 현재 작업을 새 프로젝트로 저장했습니다.':'Google 계정에 연결하고 현재 작업을 프로젝트로 저장했습니다.')}else{page='home';location.hash='';await refreshWorkspace(false);render();toast('워크스페이스를 열었습니다.')}}finally{if(btn)btn.disabled=false}},
+ logout:async()=>{clearTimeout(cloudSyncTimer);await waitCloudSync();if(user&&unsaved)await saveCloudCurrent('autosave');await waitCloudSync();await Cloud.logout();user=null;cloudRevision=0;cloudEditVersion=0;cloudSaveQueue=Promise.resolve();engine=null;sessionStorage.removeItem('norn.engine');sessionStorage.removeItem('norn.cloud.project');browserStudio?.reset();project=emptyProject();media=[];selected='';close();render();toast('로그아웃했습니다. 내 파일을 선택해 계속 작업할 수 있습니다.')},
  'connect-submit':async()=>{if(unsaved&&!confirm('현재 미저장 편집 대신 연결한 폴더의 편집을 열까요? 필요하면 먼저 JSON으로 백업하세요.'))return;await connectTo($('#engine-url').value.trim(),$('#engine-token').value.trim())},
  disconnect:()=>{engine=null;sessionStorage.removeItem('norn.engine');close();render();toast('엔진 연결을 해제했습니다. 작업 프로세스는 터미널에서 종료하세요.')},
  select:el=>selectScene(el.dataset.id),previous:()=>selectOffset(-1),next:()=>selectOffset(1),
