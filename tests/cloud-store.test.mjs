@@ -20,3 +20,9 @@ test('project list paginates beyond the first 100 projects',async()=>{
  const rows=await repo(uid).list();
  assert.equal(rows.length,105);
 });
+
+test('project history production probe creates verifies and removes its temporary project',async()=>{
+ const r=repo('history-probe-user');
+ assert.deepEqual(await r.probeProjectHistory(),{project:true,history:true});
+ assert.equal((await r.list()).length,0);
+});
