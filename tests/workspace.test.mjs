@@ -12,3 +12,14 @@ test('transition duration affects labels without fake global progress',()=>{cons
 
  test('unconnected cloud project keeps file fingerprints for later relinking',()=>{const p=D.demoProject();p.assets=[{id:'old',sha256:'a'.repeat(64),kind:'image',size:123}];p.variants[0].scenes[0].source_id='old';const unloaded=W.relinkProject(p,[]).project;assert.equal(unloaded.assets.length,1);const loaded=W.relinkProject(unloaded,[{id:'new',sha256:'a'.repeat(64),kind:'image',size:123}]);assert.equal(loaded.project.variants[0].scenes[0].source_id,'new')});
  test('deliberately empty SNS text stays empty and unedited channels remain draftable',()=>{const p=D.demoProject();p.posts={short:{x:''}};assert.equal(W.composePost(W.cloudData(p),p.variants[0],'x'),'');assert.ok(W.composePost(W.cloudData(p),p.variants[0],'instagram').length>0)});
+
+test('project media isolation retains only files belonging to the opened project',()=>{
+ const media=[
+  {id:'a',sha256:'a'.repeat(64),kind:'image',size:10},
+  {id:'b',sha256:'b'.repeat(64),kind:'video',size:20},
+  {id:'c',sha256:'c'.repeat(64),kind:'image',size:30}
+ ];
+ const project={assets:[{id:'other-id',sha256:'b'.repeat(64),kind:'video',size:20}]};
+ assert.deepEqual(W.projectMedia(project,media).map(x=>x.id),['b']);
+ assert.deepEqual(W.projectMedia({assets:[]},media),[]);
+});
