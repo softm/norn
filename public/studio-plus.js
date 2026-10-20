@@ -83,7 +83,7 @@ export function installStudioPlus(C){
  async function renderRequest(preview=false,all=false){if(!state().engine)return C.connectModal();if(missing().length)throw Error('원본이 연결되지 않은 장면이 있습니다. 같은 원본 폴더를 다시 연결하세요.');if(state().job.status==='running')throw Error('현재 작업을 완료하거나 취소한 후 다시 시작하세요.');previewKey=signature();if(all){const ready=state().project.variants.filter(v=>v.scenes.length);if(!confirm(`${ready.length}개 버전을 순서대로 생성할까요? 각 버전은 원본을 복사하지 않고 별도 MP4로 저장됩니다.`))return;const response=await api('/api/render-batch',{project:state().project});C.assign({job:response.job,project:response.project,unsaved:false});close();render();return}await C.requestRender(preview)}
  const previous={...C.actions};
  Object.assign(C.actions,{
-  'quick-maker':quickMaker,'quick-apply':applyQuickMaker,workspace:showWorkspace,
+  'quick-maker':quickMaker,'quick-apply':applyQuickMaker,workspace:()=>C.openWorkspace(),
   'history-restore':async el=>{if(state().unsaved&&!confirm('현재 변경사항을 먼저 저장하지 않고 과거 이력을 불러올까요?'))return;const currentRevision=state().cloudRevision;const old=await Cloud.loadHistory(state().project.id,Number(el.dataset.revision));const linked=W.relinkProject(old,state().media);linked.project.revision=state().engineRevision??state().project.revision??0;C.assign({project:linked.project,selected:linked.project.variants.find(x=>x.id===linked.project.activeVariant).scenes[0]?.id||'',cloudRevision:currentRevision,unsaved:true,previewUrl:''});close();render();toast('과거 이력을 복원했습니다. 저장하면 새 revision으로 기록됩니다.');},
   'focus-timeline':()=>{$('.timeline')?.scrollIntoView({block:'center',behavior:'smooth'});$('#track')?.focus({preventScroll:true})},
   backup:()=>download('norn-project.json',JSON.stringify(W.cloudData(state().project),null,2)),
