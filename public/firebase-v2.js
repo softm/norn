@@ -17,3 +17,4 @@ export async function deleteCloud(id,expected){return (await firebase()).repo.re
 export async function savePreferences(value){return (await firebase()).repo.savePreferences(value)}
 export async function loadPreferences(){const s=await firebase();if(!s.authentication.currentUser)return null;return s.repo.loadPreferences()}
 export async function testConnection(){return (await firebase()).repo.probe()}
+export async function testProjectHistory(){return (await firebase()).repo.probeProjectHistory()}
