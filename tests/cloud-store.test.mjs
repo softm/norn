@@ -12,3 +12,11 @@ test('guest cannot access cloud and invalid project paths fail',async()=>{const 
 
 test('project save creates revision history and can restore snapshot',async()=>{const r=repo('history-alice'),p=demoProject();await r.save(p,0,'manual');p.title='두 번째 제목';await r.save(p,1,'autosave');const history=await r.listHistory(p.id);assert.deepEqual(history.map(x=>x.revision).slice(0,2),[2,1]);const old=await r.loadHistory(p.id,1);assert.equal(old.title,'빛이 머무는 오후');assert.equal(old.historyEvent,'manual')});
 test('project deletion removes history children',async()=>{const r=repo('history-delete'),p=demoProject();await r.save(p,0,'manual');await r.remove(p.id,1);const db=env.authenticatedContext('history-delete').firestore();const rows=await sdk.getDocs(sdk.collection(db,'users','history-delete','projects',p.id,'history'));assert.equal(rows.size,0)});
+
+test('project list paginates beyond the first 100 projects',async()=>{
+ const uid='many-projects',db=env.authenticatedContext(uid).firestore(),batch=sdk.writeBatch(db);
+ for(let i=0;i<105;i++)batch.set(sdk.doc(db,'users',uid,'projects','p'+String(i).padStart(3,'0')),{schema_version:2,title:'P'+i,description:'',activeVariant:'short',frames:5,targetDuration:30,revision:1,updatedAt:sdk.serverTimestamp(),variantIds:['short']});
+ await batch.commit();
+ const rows=await repo(uid).list();
+ assert.equal(rows.length,105);
+});
