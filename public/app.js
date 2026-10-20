@@ -109,6 +109,8 @@ async function loadCloudProject(id,{notify=true}={}){
  if(!user)throw Error('로그인이 필요합니다.');
  if(!W.validId(id))throw Error('프로젝트 ID 오류');
  const p=await Cloud.loadCloud(id),revision=p.revision,matchedMedia=W.projectMedia(p,media),linked=W.relinkProject(p,matchedMedia);
+ browserStudio?.resetProjectState?.();
+ browserStudio?.retainMedia?.(matchedMedia);
  media=matchedMedia;project=linked.project;project.revision=engineRevision||0;cloudRevision=revision;cloudEditVersion=0;selected=v().scenes[0]?.id||'';
  history=[];redo=[];previewUrl='';unsaved=false;page='studio';sessionStorage.setItem('norn.cloud.project',id);
  if(location.hash!=='#studio')window.history.replaceState(null,'','#studio');
@@ -187,7 +189,7 @@ async function addFiles(){return browserStudio?.selectFiles?.()}
 const actions={home:()=>user?openWorkspace():(page='home',location.hash='',render()),enter,guest:()=>{close();enter()},close,account,connect:connectModal,
  'workspace-refresh':()=>refreshWorkspace(),
  'new-project':()=>{if(!user)return account();modal('새 프로젝트',`<span class="eyebrow">NEW PROJECT</span><p>하나의 영상 작업을 하나의 프로젝트로 관리합니다.</p><label>프로젝트 이름<input id="new-project-title" maxlength="160" placeholder="예: 2026 들깨 수확 영상" autofocus></label><div class="actions"><button data-action="close">취소</button><button class="primary" data-action="create-project">프로젝트 만들기</button></div>`)},
- 'create-project':async()=>{if(!user)throw Error('로그인이 필요합니다.');const title=($('#new-project-title')?.value||'').trim();if(!title)throw Error('프로젝트 이름을 입력하세요.');clearTimeout(cloudSyncTimer);await waitCloudSync();project=emptyProject();project.title=title;media=[];selected='';history=[];redo=[];previewUrl='';engineRevision=0;cloudRevision=0;cloudEditVersion=0;unsaved=true;await saveCloudCurrent('manual');sessionStorage.setItem('norn.cloud.project',project.id);close();page='studio';location.hash='studio';render();toast('프로젝트를 만들었습니다. 이제 사진·영상을 추가하세요.')},
+ 'create-project':async()=>{if(!user)throw Error('로그인이 필요합니다.');const title=($('#new-project-title')?.value||'').trim();if(!title)throw Error('프로젝트 이름을 입력하세요.');clearTimeout(cloudSyncTimer);await waitCloudSync();browserStudio?.reset();project=emptyProject();project.title=title;media=[];selected='';history=[];redo=[];previewUrl='';engineRevision=0;cloudRevision=0;cloudEditVersion=0;unsaved=true;await saveCloudCurrent('manual');sessionStorage.setItem('norn.cloud.project',project.id);close();page='studio';location.hash='studio';render();toast('프로젝트를 만들었습니다. 이제 사진·영상을 추가하세요.')},
  'project-open':async el=>loadCloudProject(el.dataset.id),
  'project-delete':async el=>{if(!confirm('이 프로젝트의 Firebase 편집 정보를 삭제할까요? 로컬 원본 파일은 삭제하지 않습니다.'))return;await Cloud.deleteCloud(el.dataset.id,Number(el.dataset.revision));if(sessionStorage.getItem('norn.cloud.project')===el.dataset.id)sessionStorage.removeItem('norn.cloud.project');await refreshWorkspace();toast('프로젝트를 삭제했습니다.')},
  'project-history':async el=>{const rows=await Cloud.listHistory(el.dataset.id),labels={autosave:'자동 저장',manual:'직접 저장',restore:'복원','quick-maker':'자동 제작',render:'영상 생성'};const body=rows.length?'<div class="project-history">'+rows.map(row=>'<div class="history-row"><span><strong>r'+row.revision+'</strong> · '+(labels[row.event]||'저장')+'</span><small>'+cloudTime(row.createdAt)+'</small></div>').join('')+'</div>':'<p>저장된 세부 이력이 없습니다.</p>';modal((el.dataset.title||'프로젝트')+' · 작업 이력',body)},
