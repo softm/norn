@@ -13,3 +13,5 @@
 .workspace-projects{display:grid;gap:8px;max-height:42vh;overflow:auto;padding-right:4px}
 .notice{padding:10px 12px;border-radius:12px;background:rgba(187,128,54,.12)}
 @media (max-width:720px){.workspace-summary{grid-template-columns:repeat(2,minmax(0,1fr))}.workflow-nav{overflow-x:auto;flex-wrap:nowrap;padding-bottom:4px}.workflow-nav button{white-space:nowrap}}
+
+.project-history{display:grid;gap:7px;max-height:260px;overflow:auto;margin:8px 0 18px}.history-row{display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;text-align:left;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:transparent}.history-row:hover{border-color:var(--accent)}.history-row small{color:var(--muted);white-space:nowrap}@media(max-width:620px){.history-row{align-items:flex-start;flex-direction:column;gap:3px}}
