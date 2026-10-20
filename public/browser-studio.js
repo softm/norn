@@ -16,6 +16,7 @@ export function installBrowserStudio(C) {
   const localMode=()=>!state().engine;
   function clearOutputs(){for(const result of outputs.values())URL.revokeObjectURL(result.url);outputs.clear();if(previewObjectURL)URL.revokeObjectURL(previewObjectURL);previewObjectURL='';}
   function resetProjectState(){controller?.abort();clearOutputs();folderName='';lastImport=null;}
+  function retainMedia(keep=[]){const ids=new Set(keep.map(item=>item?.id).filter(Boolean));revokeMedia(state().media.filter(item=>!ids.has(item?.id)));}
   function reset(){resetProjectState();revokeMedia(state().media);}
   function detachEngine(){C.assign({engine:null,catalog:{styles:D.styles,transitions:BROWSER_TRANSITIONS}});sessionStorage.removeItem('norn.engine');}
   function openStudio(){C.assign({page:'studio'});if(location.hash!=='#studio')window.history.replaceState(null,'','#studio');}
@@ -310,5 +311,5 @@ export function installBrowserStudio(C) {
     if(busy()){toast('현재 작업을 완료하거나 취소한 후 자료를 선택하세요.');return;}
     readDroppedFiles(event.dataTransfer).then(files=>files.length?importLocal(files):toast('폴더를 읽지 못했습니다. 폴더 선택 버튼으로 다시 선택하세요.')).catch(C.modalError);
   },true);
-  return {mount,reset,resetProjectState,busy,hasUnsavedOutputs,selectFiles,requestRender:preview=>preview?executeRender({preview:true}):exportDialog()};
+  return {mount,reset,resetProjectState,retainMedia,busy,hasUnsavedOutputs,selectFiles,requestRender:preview=>preview?executeRender({preview:true}):exportDialog()};
 }
