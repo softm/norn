@@ -10,7 +10,7 @@ export function installStudioPlus(C){
  function mount(){
   document.title=(state().project.title||'노른')+' · NORN';
   if(!$('.studio'))return;
-  if(!$('#workflow-nav')){const nav=document.createElement('nav');nav.id='workflow-nav';nav.className='workflow-nav';nav.setAttribute('aria-label','영상 제작 단계');nav.innerHTML=button('connect','1 자료 추가')+button('focus-timeline','2 장면 편집')+button('render','3 영상 저장');$('.workspace').before(nav)}
+  if(!$('#workflow-nav')){const nav=document.createElement('nav');nav.id='workflow-nav';nav.className='workflow-nav';nav.setAttribute('aria-label','영상 제작 단계');nav.innerHTML=button('quick-maker','✦ 자동 제작','primary small')+button('connect','1 자료 추가')+button('focus-timeline','2 장면 편집')+button('render','3 영상 저장')+button('workspace','워크스페이스','ghost small');$('.workspace').before(nav)}
   const lib=$('.library');if(lib&&!$('#library-search')){const input=document.createElement('input');input.id='library-search';input.placeholder='원본 파일 이름으로 찾기';input.value=filter;input.setAttribute('aria-label','원본 검색');input.addEventListener('input',()=>{filter=input.value;filterAssets()});$('.library-grid').before(input);filterAssets()}
   if(!$('#variant-tools')){const menu=document.createElement('details');menu.className='variant-more';menu.innerHTML='<summary>버전 관리</summary><div id="variant-tools" class="variant-tools">'+button('variant-settings','버전 설정')+button('render-all','전체 버전 저장')+'</div>';$('.stage-toolbar').append(menu)}
   if(!$('#timeline-tools')){const box=document.createElement('span');box.id='timeline-tools';box.className='timeline-tools';box.innerHTML='<label>타임라인 <input type="range" min=".5" max="3" step=".25" value="'+zoom+'" id="timeline-zoom" aria-label="타임라인 확대"></label>';$('.timeline-head').append(box);$('#timeline-zoom').oninput=e=>{zoom=Number(e.target.value);zoomClips()};zoomClips()}
@@ -37,10 +37,53 @@ export function installStudioPlus(C){
    handle.onkeydown=e=>{if(!['ArrowLeft','ArrowRight'].includes(e.key))return;e.preventDefault();const shift=(e.key==='ArrowLeft'?-1:1)/v().settings.fps;C.changeTiming(handle.id==='trim-start'?'start':'end',(handle.id==='trim-start'?row.start:row.start+row.source_duration)+shift)};
   });
  }
+ function cleanMediaName(name=''){return String(name).split('/').pop().replace(/\.[^.]+$/,'').replace(/[_-]+/g,' ').replace(/\s+/g,' ').trim()}
+ function quickMaker(){
+  const hasMedia=state().media.some(m=>m.kind==='image'||m.kind==='video');
+  modal('누구나 쉽게 · 자동 제작',`<span class="eyebrow">EASY MOVIE · 1분 초안</span><p>사진·영상을 자동으로 장면에 배치하고 첫 타이틀, 장면 문구, 전환 효과와 배경음악을 한 번에 준비합니다. 원본 파일은 업로드하지 않습니다.</p>${hasMedia?'':'<p class="notice">먼저 사진·영상 또는 폴더를 추가하세요.</p>'}<label>영상 제목<input id="quick-title" maxlength="160" value="${esc(state().project.title==='새 이야기'?'':state().project.title)}" placeholder="예: 서산 농장 가을 기록"></label><div class="row"><label>분위기<select id="quick-style"><option value="simple">담백하게</option><option value="warm">따뜻하게</option><option value="dynamic">경쾌하게</option></select></label><label>장면 수<select id="quick-scenes"><option>6</option><option selected>10</option><option>15</option><option>20</option></select></label></div><div class="row"><label>사진 길이(초)<input id="quick-photo-duration" type="number" min="1" max="10" step=".5" value="3"></label><label>영상 장면 최대(초)<input id="quick-video-duration" type="number" min="1" max="20" step=".5" value="5"></label></div><label class="check"><input id="quick-title-card" type="checkbox" checked>첫 장면에 영상 제목 자동 삽입</label><label class="check"><input id="quick-caption" type="checkbox" checked>파일명을 읽기 쉬운 장면 문구로 자동 사용</label><label class="check"><input id="quick-transition" type="checkbox" checked>장면 사이 전환 효과 자동 적용</label><label class="check"><input id="quick-music" type="checkbox" checked>선택한 오디오가 있으면 배경음악 자동 적용</label><p class="micro">음성 인식 자막(STT)은 별도 기능입니다. 여기서는 파일명·프로젝트 제목 기반의 안전한 자동 문구를 만듭니다.</p><div class="actions">${button('quick-apply','자동 초안 만들기','primary')}${button('concept','AI 구성 더하기')}</div>`);
+ }
+ function applyQuickMaker(){
+  const sources=state().media.filter(m=>m.kind==='image'||m.kind==='video');
+  if(!sources.length)throw Error('먼저 사진·영상 또는 폴더를 추가하세요.');
+  const limit=Math.max(1,Math.min(20,Number($('#quick-scenes')?.value)||10));
+  const photoDuration=Math.max(1,Math.min(10,Number($('#quick-photo-duration')?.value)||3));
+  const videoDuration=Math.max(1,Math.min(20,Number($('#quick-video-duration')?.value)||5));
+  const mode=$('#quick-style')?.value||'simple',useCaption=$('#quick-caption')?.checked,useTransition=$('#quick-transition')?.checked,useMusic=$('#quick-music')?.checked,useTitle=$('#quick-title-card')?.checked;
+  const title=($('#quick-title')?.value||'').trim();
+  const picked=sources.slice(0,limit);
+  const styles={simple:'clean',warm:'emotional',dynamic:'bold_shortform'};
+  const transitions={simple:['fade'],warm:['fade','dissolve'],dynamic:['slideleft','smoothright','zoomin']};
+  edit(()=>{
+   if(title)state().project.title=title;
+   const rows=picked.map((m,i)=>{
+    const row=D.scene(m,v().settings.fps);
+    if(m.kind==='image')row.duration=photoDuration;
+    if(m.kind==='video'){const end=Math.min(m.analysis?.duration||videoDuration,videoDuration);Object.assign(row,D.timing(row,0,Math.max(1/v().settings.fps,end),1,v().settings.fps))}
+    row.style=styles[mode]||'clean';
+    if(useTitle&&i===0)row.title=(title||state().project.title||cleanMediaName(m.relative_path)).slice(0,100);
+    if(useCaption)row.caption=cleanMediaName(m.relative_path).slice(0,240);
+    if(useTransition&&i<picked.length-1){const list=transitions[mode]||['fade'];row.transition=list[i%list.length];row.transition_duration=mode==='dynamic'?.22:.4}
+    return row;
+   });
+   v().scenes=rows;
+   v().audio=v().audio||D.audioDefaults();
+   if(useMusic){const audio=state().media.find(m=>m.kind==='audio');if(audio){v().audio.music_id=audio.id;v().audio.music_volume=.18;v().audio.loop=true}}
+   C.assign({selected:rows[0]?.id||''});
+  });
+  close();
+  toast('자동 초안을 만들었습니다. 타임라인에서 장면·문구·효과를 바로 고칠 수 있어요.');
+ }
+ async function showWorkspace(){
+  if(!state().user){modal('워크스페이스',`<span class="eyebrow">FIREBASE WORKSPACE</span><h3>로그인하면 작업 정보를 이어서 볼 수 있어요.</h3><p>원본 사진·영상은 올리지 않고 제목, 장면 순서, 타이틀·문구, 효과, 음악 설정과 파일 식별 정보만 Firebase에 저장합니다.</p><div class="actions">${button('login','Google 로그인','primary')}${button('backup','현재 작업 JSON 백업')}</div>`);return}
+  const rows=await Cloud.listCloud(),current=state().project;
+  const totalScenes=current.variants.reduce((n,row)=>n+row.scenes.length,0);
+  modal('워크스페이스',`<span class="eyebrow">FIREBASE WORKSPACE</span><div class="workspace-summary"><div><strong>${esc(current.title)}</strong><small>현재 작업</small></div><div><strong>${current.variants.length}</strong><small>버전</small></div><div><strong>${totalScenes}</strong><small>장면</small></div><div><strong>${state().unsaved?'저장 대기':'동기화됨'}</strong><small>Firebase</small></div></div><div class="actions">${button('cloudsave','지금 Firebase 저장','primary')}${button('backup','JSON 백업')}</div><h3>저장된 프로젝트</h3><div class="workspace-projects">${rows.length?rows.map(p=>`<div class="cloud-row"><button class="project-card" data-action="cloudload" data-id="${esc(p.id)}"><strong>${esc(p.title||'제목 없음')}</strong><small>버전 ${p.variantIds?.length||0}개 · revision ${p.revision||0}</small></button><button class="small danger" data-action="clouddelete" data-id="${esc(p.id)}" data-revision="${p.revision||0}">삭제</button></div>`).join(''):'<p class="muted">아직 Firebase에 저장한 프로젝트가 없습니다.</p>'}</div><p class="micro">다른 기기에서 열 때는 동일한 원본 파일·폴더를 다시 선택하면 파일 해시로 연결합니다.</p>`,true);
+ }
  function missing(){return v().scenes.filter(row=>!state().media.some(m=>m.id===row.source_id))}
  async function renderRequest(preview=false,all=false){if(!state().engine)return C.connectModal();if(missing().length)throw Error('원본이 연결되지 않은 장면이 있습니다. 같은 원본 폴더를 다시 연결하세요.');if(state().job.status==='running')throw Error('현재 작업을 완료하거나 취소한 후 다시 시작하세요.');previewKey=signature();if(all){const ready=state().project.variants.filter(v=>v.scenes.length);if(!confirm(`${ready.length}개 버전을 순서대로 생성할까요? 각 버전은 원본을 복사하지 않고 별도 MP4로 저장됩니다.`))return;const response=await api('/api/render-batch',{project:state().project});C.assign({job:response.job,project:response.project,unsaved:false});close();render();return}await C.requestRender(preview)}
  const previous={...C.actions};
  Object.assign(C.actions,{
+  'quick-maker':quickMaker,'quick-apply':applyQuickMaker,workspace:showWorkspace,
   'focus-timeline':()=>{$('.timeline')?.scrollIntoView({block:'center',behavior:'smooth'});$('#track')?.focus({preventScroll:true})},
   backup:()=>download('norn-project.json',JSON.stringify(W.cloudData(state().project),null,2)),
   preview:()=>renderRequest(true),render:()=>renderRequest(false),'render-all':()=>renderRequest(false,true),
