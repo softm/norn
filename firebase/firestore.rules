@@ -38,6 +38,18 @@ service cloud.firestore {
         allow create, update: if owner(uid) && variantShape(request.resource.data,variantId)
           && variantId in getAfter(/databases/$(database)/documents/users/$(uid)/projects/$(projectId)).data.variantIds;
       }
+      match /history/{historyId} {
+        allow read, delete: if owner(uid);
+        allow create: if owner(uid)
+          && request.resource.data.keys().hasOnly(['schema_version','revision','event','title','createdAt','snapshot'])
+          && request.resource.data.schema_version == 1
+          && request.resource.data.revision is int && request.resource.data.revision >= 1
+          && request.resource.data.event in ['autosave','manual','restore','quick-maker','render']
+          && request.resource.data.title is string && request.resource.data.title.size() <= 160
+          && request.resource.data.createdAt == request.time
+          && request.resource.data.snapshot is map;
+        allow update: if false;
+      }
     }
     match /users/{uid}/settings/{settingId} {
       allow read, delete: if owner(uid) && settingId == 'defaults';
