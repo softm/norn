@@ -45,7 +45,8 @@ test('root entry contains the application DOM and loads its actual module',async
 });
 test('root diagnostic links stay at root',async()=>{
   const entry=await text('setup.html');
-  assert.match(entry,/href="\.\/#studio"/);
+  assert.doesNotMatch(entry,/href="\.\/#studio"/,'Setup navigation should return to the project-aware home/workspace.');
+  assert.match(entry,/href="\.\/"/);
   assert.doesNotMatch(entry,/<a[^>]+href="\.\/public\//);
 });
 test('runtime config resolves relative to its module, not the document',async()=>{
