@@ -8,9 +8,11 @@ async function initialize(){const c=await config();if(!c.enabled)throw Error('Fi
 export async function login(){try{const s=await firebase();await s.auth.setPersistence(s.authentication,s.auth.browserSessionPersistence);const provider=new s.auth.GoogleAuthProvider();provider.setCustomParameters({prompt:'select_account'});return (await s.auth.signInWithPopup(s.authentication,provider)).user}catch(e){throw Error(authMessage(e))}}
 export async function observe(callback){const c=await config();if(!c.enabled)return ()=>{};const s=await firebase();return s.auth.onAuthStateChanged(s.authentication,callback)}
 export async function logout(){const s=await firebase();await s.auth.signOut(s.authentication)}
-export async function saveCloud(project,expected=0){return (await firebase()).repo.save(project,expected)}
+export async function saveCloud(project,expected=0,event='autosave'){return (await firebase()).repo.save(project,expected,event)}
 export async function listCloud(){return (await firebase()).repo.list()}
 export async function loadCloud(id){return (await firebase()).repo.load(id)}
+export async function listHistory(id){return (await firebase()).repo.listHistory(id)}
+export async function loadHistory(id,revision){return (await firebase()).repo.loadHistory(id,revision)}
 export async function deleteCloud(id,expected){return (await firebase()).repo.remove(id,expected)}
 export async function savePreferences(value){return (await firebase()).repo.savePreferences(value)}
 export async function loadPreferences(){const s=await firebase();if(!s.authentication.currentUser)return null;return s.repo.loadPreferences()}
