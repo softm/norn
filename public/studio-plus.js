@@ -62,7 +62,7 @@ export function installStudioPlus(C){
     row.style=styles[mode]||'clean';
     if(useTitle&&i===0)row.title=(title||state().project.title||cleanMediaName(m.relative_path)).slice(0,100);
     if(useCaption)row.caption=cleanMediaName(m.relative_path).slice(0,240);
-    if(useTransition&&i<picked.length-1){const list=transitions[mode]||['fade'];row.transition=list[i%list.length];row.transition_duration=mode==='dynamic'?.22:.4}
+    if(useTransition&&i<picked.length-1){const list=transitions[mode]||['fade'];row.transition=list[i%list.length];row.transition_duration=mode==='dynamic' ? .22 : .4}
     return row;
    });
    v().scenes=rows;
