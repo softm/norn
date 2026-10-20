@@ -2,7 +2,7 @@ import * as D from './domain.js';
 import * as Cloud from './firebase-v2.js';
 import * as W from './workspace.js';
 import {installStudioPlus} from './studio-plus.js?v=0.5.0';
-import {installBrowserStudio} from './browser-studio.js?v=0.4.0';
+import {installBrowserStudio} from './browser-studio.js?v=0.5.0';
 import {BROWSER_TRANSITIONS} from './browser-renderer.js';
 let plus=null,browserStudio=null,engineRevision=0;
 const $=s=>document.querySelector(s),esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
