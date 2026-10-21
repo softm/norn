@@ -1,5 +1,5 @@
 /** Progressive workspace UI: original editor stays usable without account or AI. */
-import * as W from './workspace.js';
+import * as W from './workspace.js?v=0.6.0';
 export function installStudioPlus(C){
  const {D,Cloud,$,esc,modal,close,toast,api,tokenURL,render,persist,edit,download}=C;
  let filter='',zoom=1,posterChannel='instagram',previewKey='',autoApply=false,storyKey='',filmId='',lightboxId='';
@@ -84,7 +84,7 @@ export function installStudioPlus(C){
  const previous={...C.actions};
  Object.assign(C.actions,{
   'quick-maker':quickMaker,'quick-apply':applyQuickMaker,workspace:()=>C.openWorkspace(),
-  'history-restore':async el=>{if(state().unsaved&&!confirm('현재 변경사항을 먼저 저장하지 않고 과거 이력을 불러올까요?'))return;const currentRevision=state().cloudRevision;const old=await Cloud.loadHistory(state().project.id,Number(el.dataset.revision));const linked=W.relinkProject(old,state().media);linked.project.revision=state().engineRevision??state().project.revision??0;C.assign({project:linked.project,selected:linked.project.variants.find(x=>x.id===linked.project.activeVariant).scenes[0]?.id||'',cloudRevision:currentRevision,unsaved:true,previewUrl:''});close();render();toast('과거 이력을 복원했습니다. 저장하면 새 revision으로 기록됩니다.');},
+  'history-restore':async el=>{await C.flushCurrent();const currentRevision=state().cloudRevision;const old=await Cloud.loadHistory(state().project.id,Number(el.dataset.revision));const linked=W.relinkProject(old,state().media);linked.project.revision=state().engineRevision??0;C.assign({project:linked.project,selected:linked.project.variants.find(x=>x.id===linked.project.activeVariant).scenes[0]?.id||'',cloudRevision:currentRevision,unsaved:true,previewUrl:''});persist();await C.flushCurrent({event:'restore'});close();render();toast('과거 이력을 복원하고 새 저장 이력으로 보관했습니다.');},
   'focus-timeline':()=>{$('.timeline')?.scrollIntoView({block:'center',behavior:'smooth'});$('#track')?.focus({preventScroll:true})},
   backup:()=>download('norn-project.json',JSON.stringify(W.cloudData(state().project),null,2)),
   preview:()=>renderRequest(true),render:()=>renderRequest(false),'render-all':()=>renderRequest(false,true),
@@ -108,10 +108,10 @@ export function installStudioPlus(C){
   result:async()=>{if(!state().engine)return toast('먼저 로컬 엔진과 연결해 실제 영상을 생성하세요.');const d=await api('/api/artifacts'),r=d.artifacts[v().id];if(!r)throw Error('이 버전의 완성 영상이 없습니다. 미리보기 파일은 최종 결과와 다릅니다.');const link=tokenURL('/output/'+r.path.replace('generated/',''));modal('노른노른하게 완성됐어요',`<video src="${esc(link)}" controls playsinline></video><p>${esc(v().name)} · ${D.seconds(r.planned_duration)} · ${r.metadata?.width}×${r.metadata?.height} · ${(r.size/1048576).toFixed(1)}MB</p><p class="tiny">완료된 출력 스냅샷입니다. 이후 편집한 내용은 다시 생성해야 반영됩니다.</p><div class="actions"><a href="${esc(link)}" class="pill" target="_blank" rel="noopener">영상 열기·저장 ↗</a>${button('posting','게시 준비','primary')}</div>`,true)},
   'connect-submit':async()=>{const keep=$('#keep-current')?.checked,prior=D.clone(state().project);await C.connectTo($('#engine-url').value,$('#engine-token').value,!keep);if(keep){const current=state();const linked=W.relinkProject(prior,current.media);linked.project.revision=current.engineRevision??current.project.revision;C.assign({project:linked.project,selected:linked.project.variants.find(x=>x.id===linked.project.activeVariant).scenes[0]?.id||'',unsaved:true});persist();render();if(linked.missing.length||linked.ambiguous.length)toast(`미연결 ${linked.missing.length}개 · 중복 후보 ${linked.ambiguous.length}개. 원본을 확인하세요.`)}},
   connect:()=>{C.connectModal();const label=document.createElement('label');label.className='check';label.innerHTML='<input type="checkbox" id="keep-current">현재 편집·클라우드 프로젝트를 유지하고 원본만 다시 연결';$('#engine-token').after(label)},
-  cloudsave:async()=>{if(!confirm('제목·자막·편집 설정·파일 해시를 계정에 저장할까요? 원본·캡처·로컬 경로·연결 코드는 보내지 않습니다.'))return;const p=state().project;p.assets=W.relinkProject(p,state().media).project.assets;const revision=await Cloud.saveCloud(p,state().cloudRevision,'manual');C.assign({cloudRevision:revision});toast('계정에 저장했습니다. 다른 기기에서는 원본 폴더를 다시 연결하세요.');close()},
-  cloudlist:async()=>{const items=await Cloud.listCloud();modal('계정에 저장한 이야기',items.length?items.map(p=>`<div class="cloud-row"><button class="project-card" data-action="cloudload" data-id="${esc(p.id)}"><strong>${esc(p.title)}</strong><small>버전 ${p.variantIds.length}개 · 열기 ↗</small></button><button class="small danger" data-action="clouddelete" data-id="${esc(p.id)}" data-revision="${p.revision}">삭제</button></div>`).join(''):'<p>저장한 이야기가 없습니다.</p>')},
-  clouddelete:async el=>{if(!confirm('클라우드의 이 프로젝트와 편집 버전을 삭제할까요? 로컬 원본과 완성 영상은 삭제하지 않습니다.'))return;await Cloud.deleteCloud(el.dataset.id,Number(el.dataset.revision));await C.actions.cloudlist()},
-  cloudload:async el=>{if(state().unsaved&&!confirm('현재 미저장 편집 대신 계정의 프로젝트를 열까요? 먼저 JSON 백업을 권장합니다.'))return;const p=await Cloud.loadCloud(el.dataset.id);const revision=p.revision;const linked=W.relinkProject(p,state().media);linked.project.revision=state().engineRevision??state().project.revision??0;C.assign({project:linked.project,selected:linked.project.variants.find(x=>x.id===p.activeVariant).scenes[0]?.id||'',cloudRevision:revision,unsaved:false,previewUrl:'',page:'studio'});close();render();toast(linked.missing.length?'편집을 불러왔습니다. 원본 폴더를 다시 연결하세요.':'계정의 편집을 불러왔습니다.')},
+  cloudsave:async()=>{await C.saveCurrent();close()},
+  cloudlist:()=>C.openWorkspace(),
+  clouddelete:async el=>{close();await C.deleteProject(el)},
+  cloudload:async el=>{close();await C.loadCloudProject(el.dataset.id)},
   'builtin-music':async()=>{if(!state().engine)return C.connectModal();const r=await api('/api/music',{});C.assign({media:r.media});render();toast(r.notice)},
   'connection-check':()=>window.open('./setup.html','_blank','noopener')
  });

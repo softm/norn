@@ -1,6 +1,6 @@
 /** The default workflow: select originals, edit, render and save in this browser. */
-import * as W from './workspace.js';
-import {MEDIA_ACCEPT,readLocalFiles,readDroppedFiles,revokeMedia,safeFileName} from './local-media.js';
+import * as W from './workspace.js?v=0.6.0';
+import {MEDIA_ACCEPT,readLocalFiles,readDroppedFiles,revokeMedia,safeFileName} from './local-media.js?v=0.6.0';
 import {BROWSER_TRANSITIONS,getBrowserRenderSupport,validateBrowserRender,renderInBrowser} from './browser-renderer.js';
 import {createZip,postingFiles} from './browser-package.js';
 
@@ -51,8 +51,9 @@ export function installBrowserStudio(C) {
     const hadMissing=prior.project.variants.some(v=>v.scenes.some(s=>!existing.some(m=>m.id===s.source_id)));
     controller=new AbortController();operation='import';openStudio();close();
     C.assign({job:{status:'running',phase:'import',detail:'선택한 파일을 읽습니다.',stagePercent:0}});render();
+    let imported;
     try{
-      const imported=await readLocalFiles(files,{existing,signal:controller.signal,onProgress:p=>{
+      imported=await readLocalFiles(files,{existing,signal:controller.signal,onProgress:p=>{
         setJob({phase:'import',detail:`${p.current}/${p.total} · ${p.name} · ${p.phase==='hash'?'파일 확인':p.phase==='metadata'?'미리보기 준비':'확인됨'}`,stagePercent:Math.min(99,Math.floor(((p.current-1)+(p.phase==='complete'?1:p.filePercent/100*.8))/p.total*100))});
       }});
       lastImport=imported;
@@ -90,11 +91,15 @@ export function installBrowserStudio(C) {
         edit(()=>C.assign(importedState));
       }else C.assign(importedState);
       updateManifest();persist();
+      setJob({detail:'자료와 편집 내용을 이 브라우저에 저장합니다.',stagePercent:99});
+      await C.flushCurrent({cloud:false});
+      if(state().user)C.scheduleCloudSync?.();
       const missing=project.variants.flatMap(v=>v.scenes).filter(s=>!media.some(m=>m.id===s.source_id)).length;
       const detail=`자료 ${imported.assets.length}개 연결 · ${onlyRelink?'기존 편집 유지':added+'개 장면 추가'}${missing?' · 미연결 장면 '+missing+'개':''}${imported.skipped.length?' · 제외 '+imported.skipped.length+'개':''}`;
       setJob({status:'idle',phase:'import',detail,stagePercent:null});release();render();toast(detail);
       if(imported.skipped.length||imported.assets.filter(m=>m.kind!=='audio').length>added&&!onlyRelink&&active.scenes.length===120)showImportReport();
     }catch(error){
+      if(imported)revokeMedia(imported.assets.filter(item=>!state().media.some(current=>current.url===item.url)));
       setJob({status:error.name==='AbortError'?'cancelled':'error',phase:'import',detail:error.name==='AbortError'?'파일 선택을 취소했습니다. 기존 편집은 유지합니다.':error.message,stagePercent:null});
       release();render();if(error.name!=='AbortError')C.modalError(error);
     }finally{release();}
@@ -104,7 +109,7 @@ export function installBrowserStudio(C) {
     modal('선택한 자료 확인',`<p>새 자료 ${lastImport.assets.length}개 · 중복 ${lastImport.duplicates}개 · 제외 ${lastImport.skipped.length}개</p><p class="tiny">자료 보관함은 최대 600개, 한 버전의 타임라인은 최대 120개입니다. 추가 장면은 다른 버전에 배치할 수 있습니다.</p>${lastImport.skipped.length?'<ul class="import-issues">'+lastImport.skipped.map(item=>`<li><strong>${esc(item.name)}</strong><span>${esc(item.reason)}</span></li>`).join(''):'<p>선택한 파일을 정상적으로 읽었습니다.</p>'}`);
   }
   function sourceChooser(){
-    assertIdle();modal('내 자료로 시작하기',`<p>사진·영상·음악을 선택하면 이 브라우저에서 바로 편집합니다.</p><div class="source-choices">${button('addfiles','사진·영상 선택','primary')}${button('addfolder','폴더 선택')}${button('relink-files','원본 다시 연결')}${button('import','편집 JSON 열기')}</div><p class="tiny">파일이나 폴더를 화면에 끌어놓아도 됩니다. 새로고침 후에는 같은 원본을 다시 선택하세요.</p><details class="advanced-tools"><summary>고급 도구</summary><p class="tiny">기존 Python·FFmpeg 작업이나 Ollama 분석을 사용할 때만 선택하세요.</p>${button('advanced-engine','고급 엔진 연결')}${state().engine?button('browser-mode','브라우저 편집으로 돌아가기'):''}<a class="tiny" href="./setup.html" target="_blank" rel="noopener">계정 연결 진단 ↗</a></details>`);
+    assertIdle();modal('내 자료로 시작하기',`<p>사진·영상·음악을 선택하면 이 브라우저에서 바로 편집합니다.</p><div class="source-choices">${button('addfiles','사진·영상 선택','primary')}${button('addfolder','폴더 선택')}${button('relink-files','원본 다시 연결')}${button('import','편집 JSON 열기')}</div><p class="tiny">파일이나 폴더를 화면에 끌어놓아도 됩니다. 자료와 편집 내용은 이 브라우저에 자동 저장됩니다. 같은 브라우저에서 프로젝트를 다시 열어 이어서 작업하세요.</p><details class="advanced-tools"><summary>고급 도구</summary><p class="tiny">기존 Python·FFmpeg 작업이나 Ollama 분석을 사용할 때만 선택하세요.</p>${button('advanced-engine','고급 엔진 연결')}${state().engine?button('browser-mode','브라우저 편집으로 돌아가기'):''}<a class="tiny" href="./setup.html" target="_blank" rel="noopener">계정 연결 진단 ↗</a></details>`);
   }
   function renderVariant(v,quality){
     const clone=D.clone(v);const edge=({'480':854,'720':1280,'1080':1920})[quality]||1280;
@@ -234,10 +239,13 @@ export function installBrowserStudio(C) {
       try{
         if(file.size>10*1024*1024)throw Error('편집 JSON은 10MB 이하 파일을 선택하세요.');
         const p=W.cloudData(W.validateProject(JSON.parse(await file.text())));
-        if((state().unsaved||hasUnsavedOutputs())&&!confirm('현재 편집 대신 선택한 JSON을 열까요? 저장하지 않은 편집은 먼저 JSON으로 저장할 수 있습니다.'))return;
-        const linked=W.relinkProject(p,state().media.filter(m=>m.local||m.sample));detachEngine();clearOutputs();
+        await C.flushCurrent();
+        p.id=D.uid();
+        const keep=W.projectMedia(p,state().media.filter(m=>m.local||m.sample));
+        const linked=W.relinkProject(p,keep);retainMedia(keep);detachEngine();clearOutputs();
+        C.assign({media:keep});
         C.assign({project:{...linked.project,revision:0},selected:linked.project.variants.find(v=>v.id===p.activeVariant).scenes[0]?.id||'',job:{status:'idle'},previewUrl:'',clearHistory:true,cloudRevision:0});
-        openStudio();persist();render();toast(linked.missing.length?'편집을 열었습니다. 자료 선택에서 같은 원본 파일·폴더를 다시 선택하세요.':'편집을 열고 원본을 연결했습니다.');
+        openStudio();persist();render();await C.flushCurrent({cloud:false});toast(linked.missing.length?'편집을 열었습니다. 자료 선택에서 같은 원본 파일·폴더를 다시 선택하세요.':'편집을 열고 원본을 연결했습니다.');
       }catch(error){C.modalError(error);}
     };document.body.append(input);input.click();
   }
@@ -275,11 +283,11 @@ export function installBrowserStudio(C) {
     'browser-mode':()=>{assertIdle();detachEngine();C.assign({media:state().media.filter(m=>m.local||m.sample),job:{status:'idle'},previewUrl:''});close();render();toast('브라우저 편집을 시작합니다. 같은 원본 파일·폴더를 선택하세요.');},
     addfiles:()=>selectFiles(),addfolder:()=>selectFiles({folder:true}),addaudio:()=>selectFiles({audio:true}),'relink-files':()=>selectFiles({relink:true}),
     rescan:()=>localMode()?selectFiles({relink:true}):previous.rescan(),'import-report':showImportReport,
-    demo:()=>{assertIdle();if((state().unsaved||hasUnsavedOutputs())&&!confirm('현재 편집 대신 예제를 열까요?'))return;reset();detachEngine();C.assign({project:D.demoProject(),media:C.samples(),selected:'',job:{status:'idle'},previewUrl:'',clearHistory:true});C.assign({selected:variant().scenes[0]?.id||''});openStudio();render();},
-    'local-new-project':()=>{assertIdle();if((state().unsaved||hasUnsavedOutputs())&&!confirm('현재 편집을 닫고 새 이야기를 시작할까요? 원본과 다운로드한 파일은 그대로 있습니다.'))return;reset();detachEngine();C.assign({project:C.emptyProject(),media:[],selected:'',job:{status:'idle'},previewUrl:'',clearHistory:true,cloudRevision:0});persist();render();},
+    demo:async()=>{assertIdle();await C.flushCurrent();if((state().unsaved||hasUnsavedOutputs())&&!confirm('현재 편집 대신 예제를 열까요?'))return;reset();detachEngine();C.assign({project:D.demoProject(),media:C.samples(),selected:'',job:{status:'idle'},previewUrl:'',clearHistory:true});C.assign({selected:variant().scenes[0]?.id||''});openStudio();persist();render();},
+    'local-new-project':()=>{assertIdle();return C.createNewProject();},
     import:()=>localMode()?importProject():previous.import(),
-    save:async()=>{assertIdle();if(!localMode())return previous.save();downloadBlob(safeFileName(state().project.title)+'-norn-project.json',new Blob([JSON.stringify(snapshot(),null,2)],{type:'application/json'}));C.assign({unsaved:false});render();toast('편집 JSON을 저장했습니다. 원본은 포함하지 않습니다.');},
-    backup:()=>localMode()?C.actions.save():previous.backup(),
+    save:async()=>{assertIdle();return C.saveCurrent();},
+    backup:()=>{if(!localMode())return previous.backup();downloadBlob(safeFileName(state().project.title)+'-norn-project.json',new Blob([JSON.stringify(snapshot(),null,2)],{type:'application/json'}));toast('편집 JSON 백업을 내려받았습니다. 프로젝트 자동 저장은 계속 유지됩니다.');},
     concept:()=>localMode()?concept():previous.concept(),'concept-save':()=>localMode()?saveConcept():previous['concept-save'](),'auto-arrange':autoArrange,
     preview:()=>localMode()?executeRender({preview:true}):previous.preview(),render:()=>localMode()?exportDialog():previous.render(),
     'render-all':()=>localMode()?exportDialog({all:true}):previous['render-all'](),

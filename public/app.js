@@ -1,12 +1,18 @@
 import * as D from './domain.js';
-import * as Cloud from './firebase-v2.js?v=0.5.5';
-import * as W from './workspace.js';
-import {installStudioPlus} from './studio-plus.js?v=0.5.5';
-import {installBrowserStudio} from './browser-studio.js?v=0.5.5';
+import * as Cloud from './firebase-v2.js?v=0.6.0';
+import * as W from './workspace.js?v=0.6.0';
+import {installStudioPlus} from './studio-plus.js?v=0.6.0';
+import {installBrowserStudio} from './browser-studio.js?v=0.6.0';
 import {BROWSER_TRANSITIONS} from './browser-renderer.js';
-let plus=null,browserStudio=null,engineRevision=0,interactiveLogin=false;
+import {localProjectStore as Local} from './local-project-store.js?v=0.6.0';
+import {revokeMedia} from './local-media.js?v=0.6.0';
+let plus=null,browserStudio=null,engineRevision=0;
 const $=s=>document.querySelector(s),esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const app=$('#app');let project=emptyProject(),media=[],selected='',engine=null,user=null,page='home',job={status:'idle'},history=[],redo=[],previewUrl='',cloudRevision=0,unsaved=false,lastDone='',proposal=null,cloudRows=[];
+let localRows=[],workspaceRequested=false,authReady=false,authAction=false,projectLoading=false;
+let localSaveQueue=Promise.resolve(),localSavedVersion=-1,localSaving=false,localSaveError='',cloudSaving=false,cloudSaveError='';
+let activeLocalTask=null;
+const ownerKey=()=>user?.uid||'guest';
 let catalog={styles:D.styles,transitions:BROWSER_TRANSITIONS};let defaultFrames=5;let pending=false,toastTimer,overlayTimer;
 const sampleSVG=i=>`<svg xmlns="http://www.w3.org/2000/svg" width="600" height="850" viewBox="0 0 600 850"><rect width="600" height="850" fill="${['#cbbfa0','#b6c6b2','#d6b899'][i-1]}"/><circle cx="${i===1?170:385}" cy="${i===2?265:220}" r="112" fill="${['#ead7a1','#e6dfbc','#f0d29c'][i-1]}"/><path d="M-50 550 Q200 210 680 590 L680 900 L-50 900Z" fill="${['#697759','#64877a','#a07961'][i-1]}"/><path d="M-40 700 Q260 440 650 685 L650 900 L-40 900Z" fill="${['#364a39','#345d52','#6c6252'][i-1]}"/><path d="M-50 790 Q250 660 650 780" fill="none" stroke="#ded4ad" stroke-width="4" opacity=".7"/><text x="45" y="76" fill="#404d3b" font-family="sans-serif" font-size="15" letter-spacing="5">NORN / STUDY 0${i}</text><text x="45" y="820" fill="#eadfca" font-family="sans-serif" font-size="13" letter-spacing="4">FRAGMENTS OF A STORY</text></svg>`;
 const sampleURL=i=>'data:image/svg+xml;charset=utf-8,'+encodeURIComponent(sampleSVG(i));
@@ -24,47 +30,88 @@ function toast(t,action){
 }
 let cloudSyncTimer=null,cloudEditVersion=0,cloudSaveQueue=Promise.resolve();
 const waitCloudSync=()=>cloudSaveQueue.catch(()=>{});
+function updateSaveStatus(){
+ const element=$('#save-status');if(!element)return;
+ const missing=(project.assets||[]).filter(a=>!media.some(m=>m.id===a.id)).length;
+ let label='자동 저장 준비됨',state='ready';
+ if(localSaveError){label='브라우저 저장 실패 · '+localSaveError;state='error'}
+ else if(localSaving||localSavedVersion<cloudEditVersion&&hasCurrentWork()){label='이 브라우저에 저장 중…';state='saving'}
+ else if(cloudSaving){label='이 브라우저 저장됨 · 계정에 동기화 중…';state='saving'}
+ else if(user&&(unsaved||cloudSaveError)){label=cloudSaveError?'이 브라우저 저장됨 · 계정 저장 재시도 필요':'이 브라우저 저장됨 · 계정 저장 대기';state='pending'}
+ else if(localSavedVersion>=0){label=user?'프로젝트 저장됨 · 계정 동기화 완료':'프로젝트 저장됨 · 이 브라우저';state='saved'}
+ if(missing&&!localSaveError&&!localSaving)label+=' · 원본 '+missing+'개 연결 필요';
+ element.textContent=label;element.dataset.state=state;element.title=cloudSaveError||label;
+}
+function cacheCurrent(){
+ const owner=ownerKey(),id=project.id,version=cloudEditVersion;
+ project.assets=W.relinkProject(project,media).project.assets;
+ localSaving=true;localSaveError='';
+ // save() writes its recovery journal synchronously, before any network debounce.
+ const task=Local.save(owner,project,media,{cloudRevision,cloudDirty:!!user&&unsaved,editVersion:version,selected});
+ activeLocalTask=task;
+ localSaveQueue=task.then(record=>{
+  if(ownerKey()===owner&&project.id===id&&version===cloudEditVersion){
+   localSavedVersion=version;localSaveError='';if(!user)unsaved=false;
+  }
+  return record;
+ }).catch(error=>{
+  if(ownerKey()===owner&&project.id===id){localSaveError=error.message||'저장 공간을 확인하세요.';unsaved=true}
+  throw error;
+ }).finally(()=>{if(activeLocalTask===task){localSaving=false;updateSaveStatus()}});
+ localSaveQueue.catch(()=>{});updateSaveStatus();return localSaveQueue;
+}
 function saveCloudCurrent(event='autosave'){
  if(!user)return Promise.resolve(null);
+ const requestedOwner=user.uid,requestedProject=project.id;
  const run=async()=>{
-  if(!user)return null;
-  const syncProject=project.id,syncUser=user.uid,saveVersion=cloudEditVersion,status=$('#save-status');
-  const linked=W.relinkProject(project,media).project;
-  project.assets=linked.assets;
-  if(status)status.textContent='Firebase 저장 중…';
+  if(user?.uid!==requestedOwner||project.id!==requestedProject)return null;
+  const saveVersion=cloudEditVersion;
+  project.assets=W.relinkProject(project,media).project.assets;
+  const snapshot=W.cloudData(project),expected=cloudRevision;
+  cloudSaving=true;cloudSaveError='';updateSaveStatus();
   try{
-   const revision=await Cloud.saveCloud(project,cloudRevision,event);
-   if(user?.uid===syncUser&&project.id===syncProject){
-    cloudRevision=revision;
-    if(cloudEditVersion===saveVersion){
-     unsaved=false;
-     if(status)status.textContent='Firebase 저장됨';
-    }else{
-     unsaved=true;
-     if(status)status.textContent='변경됨 · Firebase 저장 대기';
-     scheduleCloudSync();
-    }
+   const revision=await Cloud.saveCloud(snapshot,expected,event);
+   // Acknowledging one revision must not erase edits made while the request ran.
+   await Local.markSynced(requestedOwner,requestedProject,{editVersion:saveVersion,cloudRevision:revision}).catch(()=>{});
+   if(user?.uid===requestedOwner&&project.id===requestedProject){
+    cloudRevision=revision;unsaved=cloudEditVersion!==saveVersion;
+    if(unsaved)scheduleCloudSync();
    }
    return revision;
-  }catch(err){
-   if(user?.uid===syncUser&&project.id===syncProject&&status)status.textContent='로컬 변경됨 · Firebase 확인 필요';
-   throw err;
-  }
+  }catch(error){
+   if(user?.uid===requestedOwner&&project.id===requestedProject){cloudSaveError=error.message||'연결을 확인하세요.';unsaved=true}
+   throw error;
+  }finally{if(user?.uid===requestedOwner&&project.id===requestedProject){cloudSaving=false;updateSaveStatus()}}
  };
- const result=cloudSaveQueue.then(run,run);
- cloudSaveQueue=result.catch(()=>{});
- return result;
+ const result=cloudSaveQueue.then(run,run);cloudSaveQueue=result.catch(()=>{});return result;
 }
 function scheduleCloudSync(){
  clearTimeout(cloudSyncTimer);
  if(!user)return;
- const syncProject=project.id,syncUser=user.uid;
+ const owner=user.uid,id=project.id;
  cloudSyncTimer=setTimeout(()=>{
-  if(!user||user.uid!==syncUser||project.id!==syncProject)return;
-  saveCloudCurrent('autosave').catch(err=>console.warn('NORN cloud autosave:',err));
+  if(user?.uid!==owner||project.id!==id)return;
+  saveCloudCurrent('autosave').catch(()=>{});
  },1800);
 }
-function persist(){cloudEditVersion++;unsaved=true;if(!user){try{localStorage.setItem('norn.guest.project',JSON.stringify(W.cloudData(project)))}catch{toast('브라우저 임시저장 공간이 부족합니다. JSON으로 백업하세요.')}}else scheduleCloudSync();const e=$('#save-status');if(e)e.textContent=user?'변경됨 · Firebase 저장 대기':'변경됨 · 저장 필요'}
+function persist(){
+ cloudEditVersion++;unsaved=true;
+ if(!user){try{localStorage.setItem('norn.guest.project',JSON.stringify(W.cloudData(W.relinkProject(project,media).project)))}catch{}}
+ cacheCurrent().catch(()=>{});if(user)scheduleCloudSync();
+}
+async function flushCurrent({cloud=true,event='autosave'}={}){
+ if(!hasCurrentWork())return;
+ if(cloud)clearTimeout(cloudSyncTimer);
+ if(localSavedVersion<cloudEditVersion||localSaveError)await cacheCurrent();else await localSaveQueue;
+ if(cloud&&user){await waitCloudSync();if(unsaved){try{await saveCloudCurrent(event)}catch(error){toast('작업은 이 브라우저에 저장했습니다. 계정 저장은 다시 시도합니다.')}}}
+}
+async function saveCurrent(){
+ if(engine){const response=await api('/api/save',{project});project.revision=response.project.revision;engineRevision=response.project.revision}
+ await flushCurrent({cloud:false});
+ if(localSavedVersion<0)await cacheCurrent();
+ if(user){clearTimeout(cloudSyncTimer);await saveCloudCurrent('manual')}
+ render();toast(user?'프로젝트와 계정 편집 정보를 저장했습니다.':'프로젝트와 자료를 이 브라우저에 저장했습니다.');
+}
 let inputHistoryTarget=null;
 const historySnapshot=()=>({project:D.clone(project),selected});
 const editingBusy=()=>browserStudio?.busy()||job.status==='running';
@@ -77,8 +124,20 @@ function pushHistory(){
 }
 function focusTimeline(){const target=$('.clip.selected .clip-select')||$('#track');target?.focus({preventScroll:true})}
 function selectScene(id){
- if(editingBusy()||!v().scenes.some(s=>s.id===id))return;
+ if(projectLoading||editingBusy()||!v().scenes.some(s=>s.id===id))return;
  selected=id;previewUrl='';render();focusTimeline();
+}
+function updateSceneTextLabels(){
+ const current=scene();if(!current)return;
+ const index=v().scenes.indexOf(current),name=current.name||'이름 없는 장면';
+ const clip=[...document.querySelectorAll('.clip')].find(element=>element.dataset.id===current.id);
+ if(clip){
+  clip.querySelector('.clip-top').textContent=name;
+  clip.querySelector('.clip-select').setAttribute('aria-label',`${index+1}번 ${name} 편집`);
+  clip.querySelector('.clip-delete').setAttribute('aria-label',`${index+1}번 ${name} 삭제`);
+ }
+ const image=$('#screen img.media');if(image)image.alt=current.name;
+ const note=$('.inspector .locknote');if(note)note.textContent=current.field_locks?.length?'● 직접 고친 문구는 자동 구성에서도 유지돼요.':'빈칸은 화면에 표시되지 않아요.';
 }
 function deleteScene(id=selected){
  if(editingBusy())return;
@@ -99,68 +158,134 @@ function restoreEdit(from,to){
  toast(from===history?'되돌렸습니다.':'다시 실행했습니다.');
 }
 function edit(fn){pushHistory();fn();previewUrl='';persist();render()}
-function restoreGuest(){try{const p=JSON.parse(localStorage.getItem('norn.guest.project'));if(p){project={...W.validateProject(p),revision:0};selected=v().scenes[0]?.id||'';if(project.variants.some(v=>v.scenes.some(s=>s.source_id.startsWith('sample'))))media=samples()}}catch{}}
-function enter(){if(!user)sessionStorage.removeItem('norn.cloud.project');if(page==='home'&&!engine&&!user&&!media.length)restoreGuest();page='studio';location.hash='studio';render()}
-function brand(){return '<a class="brand" href="#" data-action="home" aria-label="노른 홈"><span class="mark">n</span>NORN</a>'}
-function cloudTime(value){try{return value?.toDate?.().toLocaleString('ko-KR',{dateStyle:'medium',timeStyle:'short'})||'저장 시각 없음'}catch{return '저장 시각 없음'}}
-async function refreshWorkspace(renderAfter=true){if(!user){cloudRows=[];if(renderAfter&&page==='home')render();return true}try{cloudRows=await Cloud.listCloud()}catch(e){toast('프로젝트 목록을 불러오지 못했습니다: '+(e.message||e));if(renderAfter&&page==='home')render();return false}if(renderAfter&&page==='home')render();return true}
-function workspaceHome(){
- const rows=cloudRows||[];
- app.innerHTML=`<header class="topbar project-topbar">${brand()}<nav><button class="ghost small" data-action="workspace-refresh">새로고침</button><button class="small" data-action="account">${esc(user?.displayName||'내 계정')}</button></nav></header><main class="project-workspace"><section class="project-workspace-hero"><div><span class="eyebrow">NORN PROJECT WORKSPACE</span><h1>내 영상 프로젝트</h1><p>영상 작업 하나를 하나의 프로젝트로 저장합니다. 프로젝트를 다시 열면 제목·장면·자막·효과·음악 설정을 이어서 편집할 수 있습니다.</p></div><button class="primary project-create-main" data-action="new-project">＋ 새 프로젝트</button></section><section class="project-list-section"><div class="project-list-head"><div><h2>프로젝트</h2><p class="muted">Firebase에 저장된 작업 ${rows.length}개 · 원본 사진·영상은 내 컴퓨터에 유지</p></div></div><div class="project-grid"><button class="project-new-card" data-action="new-project"><span class="project-plus">＋</span><strong>새 프로젝트</strong><small>새 영상 작업 시작</small></button>${rows.map(row=>`<article class="workspace-project-card"><button class="project-open-area" data-action="project-open" data-id="${esc(row.id)}"><span class="project-cover" aria-hidden="true">${esc((row.title||'N').trim().slice(0,1).toUpperCase())}</span><span class="project-card-body"><strong>${esc(row.title||'제목 없는 프로젝트')}</strong><small>최근 작업 · ${cloudTime(row.updatedAt)}</small><span class="project-meta">버전 ${row.variantIds?.length||0} · 자료 ${row.assets?.length||0} · r${row.revision||0}</span></span></button><div class="project-card-actions"><button class="ghost small" data-action="project-history" data-id="${esc(row.id)}" data-title="${esc(row.title||'프로젝트')}">이력</button><button class="danger small" data-action="project-delete" data-id="${esc(row.id)}" data-revision="${row.revision||0}">삭제</button></div></article>`).join('')}</div></section></main>`;
+async function restoreGuest(){
+ const id=Local.getLast('guest');
+ if(id){try{await loadCloudProject(id,{notify:false,flush:false});return true}catch(error){toast(error.message)}}
+ try{
+  const saved=JSON.parse(localStorage.getItem('norn.guest.project'));
+  if(saved){project={...W.validateProject(saved),revision:0};selected=v().scenes[0]?.id||'';if(project.variants.some(v=>v.scenes.some(s=>s.source_id.startsWith('sample'))))media=samples();persist();await localSaveQueue;return true}
+ }catch{}
+ return false;
 }
-async function openWorkspace(){if(!user){page='home';location.hash='';render();return account()}clearTimeout(cloudSyncTimer);await waitCloudSync();if(unsaved){try{await saveCloudCurrent('autosave')}catch(e){if(!confirm('현재 프로젝트의 Firebase 저장이 완료되지 않았습니다. 그래도 프로젝트 목록으로 이동할까요?'))return}}page='home';location.hash='';await refreshWorkspace(false);render()}
+async function enter(){
+ if(page==='home'&&!engine&&!hasCurrentWork()){
+  if(!user)await restoreGuest();
+  else{const id=Local.getLast(ownerKey());if(id)return loadCloudProject(id)}
+ }
+ page='studio';location.hash='studio';render();
+}
+function brand(){return '<a class="brand" href="#" data-action="home" aria-label="노른 홈"><span class="mark">n</span>NORN</a>'}
+function cloudTime(value){try{const date=value?.toDate?.()||(value?new Date(value):null);return date&&!Number.isNaN(date.getTime())?date.toLocaleString('ko-KR',{dateStyle:'medium',timeStyle:'short'}):'저장 시각 없음'}catch{return '저장 시각 없음'}}
+function readWithTimeout(promise,milliseconds=7000){
+ let timer;return Promise.race([promise,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('계정 응답이 늦어 이 브라우저에 보관한 내용을 사용합니다.')),milliseconds)})]).finally(()=>clearTimeout(timer));
+}
+async function refreshWorkspace(renderAfter=true){
+ const owner=ownerKey();let loaded=true;
+ try{const rows=await Local.list(owner);if(ownerKey()!==owner)return;localRows=rows}catch{localRows=[]}
+ if(renderAfter&&page==='home')render();
+ if(user){try{const rows=await readWithTimeout(Cloud.listCloud());if(ownerKey()!==owner)return;cloudRows=rows}catch(error){loaded=false;if(ownerKey()===owner)toast('계정 목록을 불러오지 못해 이 브라우저에 보관한 프로젝트를 표시합니다.')}}else cloudRows=[];
+ if(renderAfter&&page==='home'&&ownerKey()===owner)render();return loaded;
+}
+function workspaceHome(){
+ const rows=new Map(cloudRows.map(row=>[row.id,{...row,cloud:true}]));
+ for(const local of localRows){
+  const remote=rows.get(local.id),p=local.project||local;
+  rows.set(local.id,{...remote,...(!remote||local.cloudDirty?{...p,title:local.title||p.title,updatedAt:local.updatedAt,variantIds:p.variants?.map(v=>v.id)}:{}),id:local.id,local:true,cloud:Boolean(remote),cloudDirty:local.cloudDirty,revision:remote?.revision||local.cloudRevision||0,storedAssetCount:local.storedAssetCount||0});
+ }
+ const items=[...rows.values()].sort((a,b)=>{const time=x=>x?.toDate?.().getTime()||new Date(x||0).getTime();return time(b.updatedAt)-time(a.updatedAt)});
+ app.innerHTML=`<header class="topbar project-topbar">${brand()}<nav><button class="ghost small" data-action="workspace-refresh">새로고침</button><button class="small" data-action="account">${esc(user?.displayName||'로그인')}</button></nav></header><main class="project-workspace"><section class="project-workspace-hero"><div><span class="eyebrow">NORN PROJECT WORKSPACE</span><h1>내 영상 프로젝트</h1><p>추가한 자료와 편집 내용은 자동으로 저장됩니다. 프로젝트를 열어 이어서 작업하세요.</p></div><button class="primary project-create-main" data-action="new-project">＋ 새 프로젝트</button></section><section class="project-list-section"><div class="project-list-head"><div><h2>프로젝트</h2><p class="muted">저장된 작업 ${items.length}개 · 자료는 이 브라우저에 보관${user?' · 편집 정보는 계정에 동기화':''}</p></div></div><div class="project-grid"><button class="project-new-card" data-action="new-project"><span class="project-plus">＋</span><strong>새 프로젝트</strong><small>새 영상 작업 시작</small></button>${items.map(row=>`<article class="workspace-project-card"><button class="project-open-area" data-action="project-open" data-id="${esc(row.id)}"><span class="project-cover" aria-hidden="true">${esc((row.title||'N').trim().slice(0,1).toUpperCase())}</span><span class="project-card-body"><strong>${esc(row.title||'제목 없는 프로젝트')}</strong><small>최근 작업 · ${cloudTime(row.updatedAt)}</small><span class="project-meta">버전 ${row.variantIds?.length||0} · 자료 ${row.assets?.length||0} · ${row.cloudDirty?'계정 저장 대기':row.cloud?'계정 저장됨':'이 브라우저 저장됨'}</span><small>${row.local?'보관된 원본 '+row.storedAssetCount+'개':'이 기기에서 원본 연결 필요'}</small></span></button><div class="project-card-actions">${row.cloud?`<button class="ghost small" data-action="project-history" data-id="${esc(row.id)}" data-title="${esc(row.title||'프로젝트')}">이력</button>`:''}<button class="danger small" data-action="project-delete" data-id="${esc(row.id)}" data-cloud="${row.cloud}" data-revision="${row.revision||0}">삭제</button></div></article>`).join('')}</div><p class="tiny">같은 기기·브라우저에서 원본을 다시 선택하지 않고 이어서 편집합니다. 다른 기기에서 열거나 사이트 데이터를 삭제한 경우에는 원본 파일을 다시 연결하세요.</p></section></main>`;
+}
+async function openWorkspace(){
+ if(projectLoading)return;
+ if(editingBusy())throw Error('자료 저장 또는 영상 작업이 끝난 뒤 이동하세요.');
+ projectLoading=true;app.inert=true;
+ try{await flushCurrent();workspaceRequested=true;page='home';window.history.replaceState(null,'',location.pathname+location.search);await refreshWorkspace(true)}
+ finally{projectLoading=false;app.inert=false}
+}
+function resetCurrent(){
+ browserStudio?.reset();engine=null;engineRevision=0;sessionStorage.removeItem('norn.engine');
+ project=emptyProject();media=[];selected='';history=[];redo=[];previewUrl='';job={status:'idle'};
+ cloudRevision=0;cloudEditVersion=0;unsaved=false;localSavedVersion=-1;localSaveError='';cloudSaveError='';cloudSaving=false;localSaving=false;
+}
 async function createNewProject(title=''){
- if(!user)throw Error('로그인이 필요합니다.');
- clearTimeout(cloudSyncTimer);
- await waitCloudSync();
- browserStudio?.reset();
- project=emptyProject();
+ if(projectLoading)return;
+ if(editingBusy())throw Error('현재 작업이 끝난 뒤 새 프로젝트를 시작하세요.');
+ projectLoading=true;app.inert=true;
+ try{
+ await flushCurrent();await waitCloudSync();resetCurrent();
  const now=new Date();
  project.title=(title||`새 프로젝트 · ${now.toLocaleDateString('ko-KR',{month:'numeric',day:'numeric'})} ${now.toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'})}`).slice(0,160);
- media=[];selected='';history=[];redo=[];previewUrl='';engineRevision=0;cloudRevision=0;cloudEditVersion=0;unsaved=true;
- sessionStorage.setItem('norn.cloud.project',project.id);
- close();page='studio';location.hash='studio';render();
- try{
-  await saveCloudCurrent('manual');
-  toast('새 프로젝트를 만들었습니다. 사진·영상을 추가하세요.');
- }catch(e){
-  unsaved=true;
-  scheduleCloudSync();
-  const status=$('#save-status');if(status)status.textContent='프로젝트 시작됨 · Firebase 저장 재시도';
-  toast('새 프로젝트를 열었습니다. Firebase 저장은 다시 시도합니다: '+(e.message||e));
- }
+ close();page='studio';window.history.replaceState(null,'','#studio');persist();render();
+ await flushCurrent({cloud:false});
+ if(user){sessionStorage.setItem('norn.cloud.project',project.id);try{await saveCloudCurrent('manual')}catch{toast('새 프로젝트를 이 브라우저에 저장했습니다. 계정 저장은 다시 시도합니다.');return}}
+ toast('새 프로젝트를 만들었습니다. 사진·영상을 추가하세요.');
+ }finally{projectLoading=false;app.inert=false}
 }
 let loggedInHomeRoute=null;
 async function routeLoggedInHome({notify=false}={}){
  if(!user)return false;
  if(loggedInHomeRoute)return loggedInHomeRoute;
+ const owner=ownerKey();
  loggedInHomeRoute=(async()=>{
   const loaded=await refreshWorkspace(false);
-  if(!loaded||!user||page!=='home'){if(page==='home')render();return false}
-  if(cloudRows.length===0){
-   await createNewProject();
-   return true;
-  }
-  render();
-  if(notify)toast('Google 로그인 완료 · 워크스페이스를 열었습니다.');
-  return true;
+  if(!loaded||ownerKey()!==owner||page!=='home'){if(page==='home')render();return false}
+  if(!localRows.length&&cloudRows.length===0){await createNewProject();return true}
+  render();if(notify)toast('Google 로그인 완료 · 워크스페이스를 열었습니다.');return true;
  })().finally(()=>{loggedInHomeRoute=null});
  return loggedInHomeRoute;
 }
-async function loadCloudProject(id,{notify=true}={}){
- if(!user)throw Error('로그인이 필요합니다.');
+async function loadCloudProject(id,{notify=true,flush=true}={}){
  if(!W.validId(id))throw Error('프로젝트 ID 오류');
- const p=await Cloud.loadCloud(id),revision=p.revision,matchedMedia=W.projectMedia(p,media),linked=W.relinkProject(p,matchedMedia);
- browserStudio?.resetProjectState?.();
- browserStudio?.retainMedia?.(matchedMedia);
- media=matchedMedia;project=linked.project;project.revision=engineRevision||0;cloudRevision=revision;cloudEditVersion=0;selected=v().scenes[0]?.id||'';
- history=[];redo=[];previewUrl='';unsaved=false;page='studio';sessionStorage.setItem('norn.cloud.project',id);
- if(location.hash!=='#studio')window.history.replaceState(null,'','#studio');
- render();
- if(notify)toast(linked.missing.length?'프로젝트를 열었습니다. 이 프로젝트의 원본 파일을 다시 연결하세요.':'프로젝트를 열었습니다.');
+ if(projectLoading)return;
+ if(editingBusy())throw Error('현재 작업이 끝난 뒤 프로젝트를 여세요.');
+ projectLoading=true;app.inert=true;
+ try{
+  if(flush)await flushCurrent();
+  const owner=ownerKey();let local=null,remote=null,remoteError=null;
+  try{local=await Local.load(owner,id)}catch(error){localSaveError=error.message}
+  if(user){try{remote=await readWithTimeout(Cloud.loadCloud(id),local?2500:7000)}catch(error){remoteError=error}}
+  if(ownerKey()!==owner){revokeMedia(local?.media);return}
+  if(!local&&!remote)throw remoteError||Error('저장된 프로젝트를 찾지 못했습니다.');
+  let source=local?.cloudDirty||!remote?local.project:remote;
+  let revision=remote?.revision||local?.cloudRevision||0,dirty=Boolean(local?.cloudDirty),recovered=false;
+  if(local?.cloudDirty&&remote&&local.cloudRevision!==remote.revision){
+   if(JSON.stringify(W.cloudData(local.project))===JSON.stringify(W.cloudData(remote))){source=remote;dirty=false}
+   else{
+    // Preserve both sides of a real cross-device conflict; never overwrite either.
+    source=D.clone(local.project);source.id=D.uid();source.title=(source.title+' · 복구본').slice(0,160);revision=0;recovered=true;
+    await Local.save(owner,source,local.media,{cloudRevision:0,cloudDirty:true,editVersion:local.editVersion,selected:local.selected});
+    await Local.save(owner,remote,W.projectMedia(remote,local.media),{cloudRevision:remote.revision,cloudDirty:false,editVersion:local.editVersion+1});
+   }
+  }
+  const candidates=[...(local?.media||[]),...media];
+  const matched=W.projectMedia(source,candidates).filter((item,index,all)=>all.findIndex(other=>other.id===item.id)===index);
+  if(source.variants.some(v=>v.scenes.some(s=>s.source_id.startsWith('sample'))))for(const item of samples())if(!matched.some(m=>m.id===item.id))matched.push(item);
+  const linked=W.relinkProject(source,matched),usedURLs=new Set(matched.flatMap(m=>[m.url,m.thumb_url]));
+  revokeMedia(candidates.filter(m=>!usedURLs.has(m.url)));
+  browserStudio?.resetProjectState();engine=null;engineRevision=0;sessionStorage.removeItem('norn.engine');
+  media=matched;project={...linked.project,revision:0};cloudRevision=revision;cloudEditVersion=local?.editVersion||0;
+  selected=v().scenes.some(s=>s.id===local?.selected)?local.selected:v().scenes[0]?.id||'';
+  history=[];redo=[];previewUrl='';job={status:'idle'};unsaved=dirty;page='studio';localSavedVersion=-1;localSaveError='';cloudSaveError=remoteError?.message||'';
+  if(user)sessionStorage.setItem('norn.cloud.project',project.id);
+  window.history.replaceState(null,'','#studio');render();await cacheCurrent();
+  if(!user){try{localStorage.setItem('norn.guest.project',JSON.stringify(W.cloudData(project)))}catch{}}
+  if(user&&dirty&&!remoteError)scheduleCloudSync();
+  if(recovered)toast('다른 기기의 변경과 겹쳐, 이 브라우저의 최신 작업을 별도 복구본으로 보존했습니다.');
+  else if(notify)toast(linked.missing.length?'편집을 복원했습니다. 이 기기에 없는 원본만 다시 연결하세요.':'프로젝트와 보관된 자료를 복원했습니다.');
+ }finally{projectLoading=false;app.inert=false;updateSaveStatus()}
 }
-function home(){if(user)return workspaceHome();app.innerHTML=`<header class="topbar">${brand()}<nav><button class="ghost small" data-action="enter">작업실</button><button class="primary small" data-action="account">${user?'내 계정':'로그인'}</button></nav></header><main class="landing"><section class="hero"><div><div class="eyebrow">YOUR LOCAL STORY STUDIO</div><h1>노른노른하게,<br><em>영상을 굽다.</em></h1><p>사진에 담긴 순간, 영상에 흩어진 이야기를<br>하나의 흐름으로 엮어보세요.<br>짧은 순간부터 오래 남길 이야기까지.</p><div class="hero-actions"><button class="primary" data-action="addfiles">사진·영상 선택 ↗</button><button data-action="addfolder">폴더 선택</button></div><span class="pill on">원본은 내 컴퓨터에</span> <span class="pill">숏폼 · 롱폼 · 타임랩스</span><p class="tiny" style="font-size:11px;margin-top:18px">선택한 파일로 이 브라우저에서 편집하고 영상을 저장합니다.<br>원본 업로드 없이, 로그인 없이 시작하세요.<br><button class="ghost small" data-action="demo">예제로 둘러보기 →</button></p></div><div class="hero-art" aria-label="노른 샘플 그래픽"><span class="art-caption">A FEW FRAGMENTS. ONE STORY.</span><div class="art-orbit"></div><div class="polaroid one"><img src="${sampleURL(1)}" alt="오후의 빛 샘플 그래픽"><small>01 &nbsp; A LITTLE LIGHT</small></div><div class="polaroid two"><img src="${sampleURL(2)}" alt="작은 파동 샘플 그래픽"><small>02 &nbsp; A GENTLE RHYTHM</small></div><div class="polaroid three"><img src="${sampleURL(3)}" alt="기억의 조각 샘플 그래픽"><small>03 &nbsp; WOVEN TOGETHER</small></div><span class="spark">✳</span><div class="art-badge">✦ &nbsp; 당신의 순간에, 이야기 한 스푼.</div></div></section><section class="feature-strip"><div><span class="eyebrow">01 · THE WELL</span><strong>자료에 의도를 더하고</strong><p>폴더를 연결하고 만들고 싶은 이야기를 적어요.<br>사진·영상 원본은 그 자리에 둡니다.</p></div><div><span class="eyebrow">02 · FATE SCAN</span><strong>이야기의 결을 고르고</strong><p>장면의 순서와 길이를 정하고 문구를 더해요.<br>자동 배치로 첫 구성을 빠르게 시작할 수 있어요.</p></div><div><span class="eyebrow">03 · THE LOOM</span><strong>내 취향대로 구워내요</strong><p>글씨·배속·전환·음악을 더해 영상을 만들고,<br>SNS 문구와 첨부 자료까지 준비해요.</p></div></section><footer class="footer"><span>NORN · Weave your fragments into narratives.</span><span>브라우저에서 바로 편집 · Firebase 프로젝트 워크스페이스 · 0.5.5</span></footer></main>`}
-function studio(){const current=scene(),m=mfor(current),variant=v();const missing=variant.scenes.some(s=>!mfor(s));app.innerHTML=`<main class="studio"><header class="topbar"><div class="project-head">${brand()}<span class="name">${esc(project.title)}</span><span class="pill ${engine?'on':''}" id="connection-label">${engine?'고급 엔진 연결됨':user?'브라우저 편집 · 계정 연결':'브라우저에서 편집'}</span></div><div class="toolbar"><span class="muted tiny desktop-only" id="save-status">${unsaved?'변경됨 · 저장 필요':'편집 준비됨'}</span><button class="small" data-action="concept">✦ 자동 구성</button><button class="small" data-action="save">${user?'프로젝트 저장':'편집 저장'}</button><button class="small" data-action="connect">자료 추가</button><button class="primary small" data-action="render">영상 저장 ↗</button><button class="ghost small desktop-only" data-action="account">${user?esc(user.displayName||'계정'):'로그인'}</button></div></header><div id="progress"></div><div class="workspace"><aside class="library"><div class="section-head"><h2>자료 보관함 <span class="muted tiny">${media.length}</span></h2><button class="ghost small" data-action="addfiles" aria-label="사진·영상 추가" title="사진·영상 추가">＋</button></div><div class="library-grid">${media.filter(m=>m.kind!=='audio').map(m=>`<div class="asset"><button class="view" data-action="view" data-id="${esc(m.id)}" aria-label="${esc(m.relative_path)} 원본 크게 보기"><img src="${esc(url(m,true))}" alt="${esc(m.relative_path)}"></button><button class="add" data-action="add" data-id="${esc(m.id)}" aria-label="${esc(m.relative_path)} 장면 추가">＋</button>${m.kind==='video'?`<span class="duration">▶ ${D.seconds(m.analysis.duration)}</span>`:''}<div class="asset-name">${esc(m.relative_path)}</div></div>`).join('')}</div><div class="helper">사진을 누르면 크게 보기 · ＋로 장면 추가</div><details class="library-more"><summary>작업 불러오기·관리</summary><button class="small" data-action="rescan">원본 다시 선택</button><button class="small ghost" data-action="import">편집 파일 열기 (JSON)</button></details></aside><section class="stage"><div class="stage-toolbar"><div class="row"><select class="variant-select" id="variant" aria-label="출력 버전">${project.variants.map(x=>`<option value="${esc(x.id)}" ${x.id===variant.id?'selected':''}>${esc(x.name)}</option>`).join('')}</select><button class="small ghost" data-action="newvariant" title="출력 버전 추가">＋</button></div><span class="muted tiny">${variant.settings.width} × ${variant.settings.height} · ${variant.settings.fps} FPS</span></div><div class="preview-area"><div class="screen" id="screen">${current&&m?`${m.kind==='video'||previewUrl?`<video id="player" src="${esc(previewUrl||url(m))}" controls playsinline preload="metadata"></video>`:`<img class="media" src="${esc(url(m))}" alt="${esc(current.name)}">`}<div class="frame-badge">${previewUrl?'생성한 실제 미리보기':m.sample?'샘플 그래픽':m.kind==='video'?'원본 · 1배속 확인':'사진 원본'}</div>${previewUrl?'':`<div id="text-overlay" class="text-overlay ${esc(current.style)}"><strong>${esc(current.title)}</strong><span>${esc(current.caption)}</span></div>`}`:`<div class="empty">${missing?'원본을 다시 연결해주세요.':'사진·영상 또는 폴더를 선택해 이야기를 시작하세요.'}</div>`}</div></div><div class="transport"><button class="small ghost" data-action="previous" aria-label="이전 장면">←</button><button class="small" data-action="preview">▶ ${current?.playback_speed>4?'실제 배속 미리보기':'이 장면 미리보기'}</button><button class="small ghost" data-action="next" aria-label="다음 장면">→</button><time>${D.seconds(current?.duration||0)} / ${D.seconds(D.duration(variant))}</time></div><div class="stage-note">${engine?'원본·구간 확인과 실제 합성 미리보기는 구분됩니다. 글씨·효과는 렌더링으로 확인하세요.':'자료 추가 → 장면 편집 → 영상 저장. 결과는 MP4 또는 WebM으로 저장됩니다.'}</div>${previewUrl?'<button class="small ghost" data-action="original">↶ 원본 · 구간 편집으로 돌아가기</button>':''}</section><aside class="inspector" data-scene-id="${esc(selected)}">${current?inspector(current,m):'<h2>장면 속성</h2><p class="muted">편집할 장면을 선택하세요.</p>'}</aside></div>${timeline(variant)}</main>`;progress();fitScreen();updateOverlay();const player=$('#player');if(player&&!previewUrl){player.addEventListener('loadedmetadata',()=>{player.currentTime=Math.min(current.start||0,player.duration||0)});player.addEventListener('timeupdate',()=>{if(player.currentTime>(current.start||0)+(current.source_duration||0)&&!player.paused)player.pause()})}}
+async function deleteProject(el){
+ const id=el.dataset.id;
+ if(!confirm('프로젝트와 이 브라우저의 보관 자료를 삭제할까요? 컴퓨터의 원본 파일은 그대로 유지됩니다.'))return;
+ if(id===project.id){clearTimeout(cloudSyncTimer);await localSaveQueue.catch(()=>{});await waitCloudSync()}
+ if(user&&el.dataset.cloud!=='false')await Cloud.deleteCloud(id,id===project.id?cloudRevision:Number(el.dataset.revision));
+ await Local.remove(ownerKey(),id);
+ if(!user){try{if(JSON.parse(localStorage.getItem('norn.guest.project'))?.id===id)localStorage.removeItem('norn.guest.project')}catch{}}
+ if(id===project.id){resetCurrent();sessionStorage.removeItem('norn.cloud.project')}
+ workspaceRequested=true;page='home';await refreshWorkspace();toast('프로젝트를 삭제했습니다.');
+}
+function home(){if(user||workspaceRequested||localRows.length)return workspaceHome();app.innerHTML=`<header class="topbar">${brand()}<nav><button class="ghost small" data-action="enter">작업실</button><button class="primary small" data-action="account">${user?'내 계정':'로그인'}</button></nav></header><main class="landing"><section class="hero"><div><div class="eyebrow">YOUR LOCAL STORY STUDIO</div><h1>노른노른하게,<br><em>영상을 굽다.</em></h1><p>사진에 담긴 순간, 영상에 흩어진 이야기를<br>하나의 흐름으로 엮어보세요.<br>짧은 순간부터 오래 남길 이야기까지.</p><div class="hero-actions"><button class="primary" data-action="addfiles">사진·영상 선택 ↗</button><button data-action="addfolder">폴더 선택</button></div><span class="pill on">원본은 내 컴퓨터에</span> <span class="pill">숏폼 · 롱폼 · 타임랩스</span><p class="tiny" style="font-size:11px;margin-top:18px">선택한 파일로 이 브라우저에서 편집하고 영상을 저장합니다.<br>원본 업로드 없이, 로그인 없이 시작하세요.<br><button class="ghost small" data-action="demo">예제로 둘러보기 →</button></p></div><div class="hero-art" aria-label="노른 샘플 그래픽"><span class="art-caption">A FEW FRAGMENTS. ONE STORY.</span><div class="art-orbit"></div><div class="polaroid one"><img src="${sampleURL(1)}" alt="오후의 빛 샘플 그래픽"><small>01 &nbsp; A LITTLE LIGHT</small></div><div class="polaroid two"><img src="${sampleURL(2)}" alt="작은 파동 샘플 그래픽"><small>02 &nbsp; A GENTLE RHYTHM</small></div><div class="polaroid three"><img src="${sampleURL(3)}" alt="기억의 조각 샘플 그래픽"><small>03 &nbsp; WOVEN TOGETHER</small></div><span class="spark">✳</span><div class="art-badge">✦ &nbsp; 당신의 순간에, 이야기 한 스푼.</div></div></section><section class="feature-strip"><div><span class="eyebrow">01 · THE WELL</span><strong>자료에 의도를 더하고</strong><p>폴더를 연결하고 만들고 싶은 이야기를 적어요.<br>사진·영상 원본은 그 자리에 둡니다.</p></div><div><span class="eyebrow">02 · FATE SCAN</span><strong>이야기의 결을 고르고</strong><p>장면의 순서와 길이를 정하고 문구를 더해요.<br>자동 배치로 첫 구성을 빠르게 시작할 수 있어요.</p></div><div><span class="eyebrow">03 · THE LOOM</span><strong>내 취향대로 구워내요</strong><p>글씨·배속·전환·음악을 더해 영상을 만들고,<br>SNS 문구와 첨부 자료까지 준비해요.</p></div></section><footer class="footer"><span>NORN · Weave your fragments into narratives.</span><span>브라우저에서 바로 편집 · Firebase 프로젝트 워크스페이스 · 0.6.0</span></footer></main>`}
+function studio(){const current=scene(),m=mfor(current),variant=v();const missing=variant.scenes.some(s=>!mfor(s));app.innerHTML=`<main class="studio"><header class="topbar"><div class="project-head">${brand()}<span class="name">${esc(project.title)}</span><span class="pill ${engine?'on':''}" id="connection-label">${engine?'고급 엔진 연결됨':user?'브라우저 편집 · 계정 연결':'브라우저에서 편집'}</span></div><div class="toolbar"><span class="muted tiny" id="save-status" role="status" aria-live="polite">${unsaved?'변경됨 · 저장 필요':'편집 준비됨'}</span><button class="small" data-action="concept">✦ 자동 구성</button><button class="small" data-action="save">${user?'프로젝트 저장':'편집 저장'}</button><button class="small" data-action="connect">자료 추가</button><button class="primary small" data-action="render">영상 저장 ↗</button><button class="ghost small desktop-only" data-action="account">${user?esc(user.displayName||'계정'):'로그인'}</button></div></header><div id="progress"></div><div class="workspace"><aside class="library"><div class="section-head"><h2>자료 보관함 <span class="muted tiny">${media.length}</span></h2><button class="ghost small" data-action="addfiles" aria-label="사진·영상 추가" title="사진·영상 추가">＋</button></div><div class="library-grid">${media.filter(m=>m.kind!=='audio').map(m=>`<div class="asset"><button class="view" data-action="view" data-id="${esc(m.id)}" aria-label="${esc(m.relative_path)} 원본 크게 보기"><img src="${esc(url(m,true))}" alt="${esc(m.relative_path)}"></button><button class="add" data-action="add" data-id="${esc(m.id)}" aria-label="${esc(m.relative_path)} 장면 추가">＋</button>${m.kind==='video'?`<span class="duration">▶ ${D.seconds(m.analysis.duration)}</span>`:''}<div class="asset-name">${esc(m.relative_path)}</div></div>`).join('')}</div><div class="helper">사진을 누르면 크게 보기 · ＋로 장면 추가</div><details class="library-more"><summary>작업 불러오기·관리</summary><button class="small" data-action="rescan">원본 다시 선택</button><button class="small ghost" data-action="import">편집 파일 열기 (JSON)</button></details></aside><section class="stage"><div class="stage-toolbar"><div class="row"><select class="variant-select" id="variant" aria-label="출력 버전">${project.variants.map(x=>`<option value="${esc(x.id)}" ${x.id===variant.id?'selected':''}>${esc(x.name)}</option>`).join('')}</select><button class="small ghost" data-action="newvariant" title="출력 버전 추가">＋</button></div><span class="muted tiny">${variant.settings.width} × ${variant.settings.height} · ${variant.settings.fps} FPS</span></div><div class="preview-area"><div class="screen" id="screen">${current&&m?`${m.kind==='video'||previewUrl?`<video id="player" src="${esc(previewUrl||url(m))}" controls playsinline preload="metadata"></video>`:`<img class="media" src="${esc(url(m))}" alt="${esc(current.name)}">`}<div class="frame-badge">${previewUrl?'생성한 실제 미리보기':m.sample?'샘플 그래픽':m.kind==='video'?'원본 · 1배속 확인':'사진 원본'}</div>${previewUrl?'':`<div id="text-overlay" class="text-overlay ${esc(current.style)}"><strong>${esc(current.title)}</strong><span>${esc(current.caption)}</span></div>`}`:`<div class="empty">${missing?'원본을 다시 연결해주세요.':'사진·영상 또는 폴더를 선택해 이야기를 시작하세요.'}</div>`}</div></div><div class="transport"><button class="small ghost" data-action="previous" aria-label="이전 장면">←</button><button class="small" data-action="preview">▶ ${current?.playback_speed>4?'실제 배속 미리보기':'이 장면 미리보기'}</button><button class="small ghost" data-action="next" aria-label="다음 장면">→</button><time>${D.seconds(current?.duration||0)} / ${D.seconds(D.duration(variant))}</time></div><div class="stage-note">${engine?'원본·구간 확인과 실제 합성 미리보기는 구분됩니다. 글씨·효과는 렌더링으로 확인하세요.':'자료 추가 → 장면 편집 → 영상 저장. 결과는 MP4 또는 WebM으로 저장됩니다.'}</div>${previewUrl?'<button class="small ghost" data-action="original">↶ 원본 · 구간 편집으로 돌아가기</button>':''}</section><aside class="inspector" data-scene-id="${esc(selected)}">${current?inspector(current,m):'<h2>장면 속성</h2><p class="muted">편집할 장면을 선택하세요.</p>'}</aside></div>${timeline(variant)}</main>`;progress();fitScreen();updateOverlay();const player=$('#player');if(player&&!previewUrl){player.addEventListener('loadedmetadata',()=>{player.currentTime=Math.min(current.start||0,player.duration||0)});player.addEventListener('timeupdate',()=>{if(player.currentTime>(current.start||0)+(current.source_duration||0)&&!player.paused)player.pause()})}}
 function timeline(variant){
  return `<section class="timeline" aria-label="장면 편집">
   <div class="timeline-head">
@@ -203,7 +328,7 @@ function render(){
  const inspector=$('.inspector'),sameScene=inspector?.dataset.sceneId===selected;
  const panels=sameScene?[...inspector.querySelectorAll('details[data-panel]')].map(el=>[el.dataset.panel,el.open]):[];
  const inspectorScroll=sameScene?inspector.scrollTop:0;
- page==='home'?home():studio();plus?.mount();browserStudio?.mount();observeHeader();
+ page==='home'?home():studio();plus?.mount();browserStudio?.mount();updateSaveStatus();observeHeader();
  const renderedTrack=$('#track');
  if(renderedTrack&&renderedTrack.dataset.variantId===trackVariant)renderedTrack.scrollLeft=trackScroll;
  for(const [name,open] of panels){const panel=$('.inspector details[data-panel="'+name+'"]');if(panel)panel.open=open}
@@ -228,15 +353,27 @@ function download(name,data,type='application/json'){const u=URL.createObjectURL
 function result(){if(!engine)return toast('로컬 엔진 연결 후 먼저 영상을 생성하세요.');const lastPath=job.result?.path?.replace('generated/','');const path=lastPath?.startsWith(v().id+'/')?lastPath:v().id+'/video.mp4';modal('노른노른하게 완성됐어요',`<video src="${esc(tokenURL('/output/'+path))}" controls playsinline></video><p class="tiny">현재 파일이 없다면 영상 생성을 먼저 실행해주세요. 미리보기와 최종 영상은 별도 파일입니다.</p><div class="actions"><a class="pill" href="${esc(tokenURL('/output/'+path))}" target="_blank" rel="noopener">영상 열기 / 저장 ↗</a><button data-action="posting">SNS 게시 준비</button></div>`,true)}
 async function updateOverlay(){clearTimeout(overlayTimer);if(previewUrl||!scene()||page!=='studio')return;const s=scene(),o=$('#text-overlay');if(o){o.className='text-overlay '+s.style;o.innerHTML='<strong>'+esc(s.title)+'</strong><span>'+esc(s.caption)+'</span>';o.style.bottom='auto';o.style.top={top:'12%',middle:'42%',bottom:'66%'}[s.text_position]||'66%';const ratio=($('#screen')?.clientWidth||200)/v().settings.width;o.querySelector('strong').style.fontSize=Math.max(6,s.title_size*ratio)+'px';o.querySelector('span').style.fontSize=Math.max(6,s.font_size*ratio)+'px';if(!s.title&&!s.caption)o.style.display='none';else o.style.display=''}if(!engine)return;const sid=s.id;overlayTimer=setTimeout(async()=>{try{const response=await api('/api/overlay',{scene:s,variant:v()});if(scene()?.id!==sid||previewUrl)return;const screen=$('#screen');if(!screen)return;$('#text-overlay')?.remove();screen.querySelector('.bitmap')?.remove();const img=document.createElement('img');img.className='bitmap';img.alt='실제 렌더링 글씨';img.src=response.image;Object.assign(img.style,{left:response.x/response.canvas_width*100+'%',top:response.y/response.canvas_height*100+'%',width:response.width/response.canvas_width*100+'%'});screen.append(img)}catch{}},220)}
 async function addFiles(){return browserStudio?.selectFiles?.()}
-const actions={home:()=>user?openWorkspace():(page='home',location.hash='',render()),enter,guest:()=>{close();enter()},close,account,connect:connectModal,
+const actions={home:openWorkspace,enter,guest:()=>{close();return enter()},close,account,connect:connectModal,
  'workspace-refresh':()=>refreshWorkspace(),
- 'new-project':async()=>{if(!user)return account();await createNewProject()},
+ 'new-project':()=>createNewProject(),
  'create-project':async()=>createNewProject(($('#new-project-title')?.value||'').trim()),
  'project-open':async el=>loadCloudProject(el.dataset.id),
- 'project-delete':async el=>{if(!confirm('이 프로젝트의 Firebase 편집 정보를 삭제할까요? 로컬 원본 파일은 삭제하지 않습니다.'))return;await Cloud.deleteCloud(el.dataset.id,Number(el.dataset.revision));if(sessionStorage.getItem('norn.cloud.project')===el.dataset.id)sessionStorage.removeItem('norn.cloud.project');await refreshWorkspace();toast('프로젝트를 삭제했습니다.')},
+ 'project-delete':deleteProject,
  'project-history':async el=>{const rows=await Cloud.listHistory(el.dataset.id),labels={autosave:'자동 저장',manual:'직접 저장',restore:'복원','quick-maker':'자동 제작',render:'영상 생성'};const body=rows.length?'<div class="project-history">'+rows.map(row=>'<div class="history-row"><span><strong>r'+row.revision+'</strong> · '+(labels[row.event]||'저장')+'</span><small>'+cloudTime(row.createdAt)+'</small></div>').join('')+'</div>':'<p>저장된 세부 이력이 없습니다.</p>';modal((el.dataset.title||'프로젝트')+' · 작업 이력',body)},
- login:async()=>{const btn=$('[data-action="login"]');if(btn)btn.disabled=true;const wasStudio=page==='studio',hadWork=hasCurrentWork();interactiveLogin=true;try{const signedIn=await Cloud.login();user=signedIn;cloudRevision=0;close();if(wasStudio&&hadWork){cloudEditVersion++;unsaved=true;let copied=false,saveError=null;try{await saveCloudCurrent('manual')}catch(e){if(/충돌/.test(String(e?.message||e))){project.id=D.uid();cloudRevision=0;cloudEditVersion++;unsaved=true;try{await saveCloudCurrent('manual');copied=true}catch(inner){saveError=inner}}else saveError=e}sessionStorage.setItem('norn.cloud.project',project.id);render();if(saveError)toast('Google 로그인은 완료됐지만 프로젝트 저장은 실패했습니다: '+(saveError.message||saveError));else toast(copied?'로그인 완료 · 현재 작업을 새 프로젝트로 저장했습니다.':'Google 로그인 완료 · 현재 작업을 프로젝트로 저장했습니다.')}else{page='home';location.hash='';await routeLoggedInHome({notify:true})}}finally{interactiveLogin=false;if(btn)btn.disabled=false}},
- logout:async()=>{clearTimeout(cloudSyncTimer);await waitCloudSync();if(user&&unsaved)await saveCloudCurrent('autosave');await waitCloudSync();await Cloud.logout();user=null;cloudRevision=0;cloudEditVersion=0;cloudSaveQueue=Promise.resolve();engine=null;sessionStorage.removeItem('norn.engine');sessionStorage.removeItem('norn.cloud.project');browserStudio?.reset();project=emptyProject();media=[];selected='';close();render();toast('로그아웃했습니다. 내 파일을 선택해 계속 작업할 수 있습니다.')},
+ login:async()=>{
+  const button=$('[data-action="login"]');if(button)button.disabled=true;
+  const hadWork=page==='studio'&&hasCurrentWork();authAction=true;
+  try{
+   await flushCurrent({cloud:false});const signedIn=await Cloud.login();user=signedIn;cloudRevision=0;localRows=[];cloudRows=[];close();
+   if(hadWork){project.id=D.uid();cloudEditVersion=0;localSavedVersion=-1;persist();sessionStorage.setItem('norn.cloud.project',project.id);await saveCurrent()}
+   else{resetCurrent();workspaceRequested=true;page='home';window.history.replaceState(null,'',location.pathname+location.search);await routeLoggedInHome({notify:true})}
+  }finally{authAction=false;if(button)button.disabled=false}
+ },
+ logout:async()=>{
+  await flushCurrent();authAction=true;
+  try{await Cloud.logout();user=null;clearTimeout(cloudSyncTimer);resetCurrent();sessionStorage.removeItem('norn.cloud.project');workspaceRequested=true;page='home';close();window.history.replaceState(null,'',location.pathname+location.search);await refreshWorkspace(false);render();toast('로그아웃했습니다. 계정 프로젝트는 보관되어 있습니다.')}
+  finally{authAction=false}
+ },
  'connect-submit':async()=>{if(unsaved&&!confirm('현재 미저장 편집 대신 연결한 폴더의 편집을 열까요? 필요하면 먼저 JSON으로 백업하세요.'))return;await connectTo($('#engine-url').value.trim(),$('#engine-token').value.trim())},
  disconnect:()=>{engine=null;sessionStorage.removeItem('norn.engine');close();render();toast('엔진 연결을 해제했습니다. 작업 프로세스는 터미널에서 종료하세요.')},
  select:el=>selectScene(el.dataset.id),previous:()=>selectOffset(-1),next:()=>selectOffset(1),
@@ -249,26 +386,26 @@ const actions={home:()=>user?openWorkspace():(page='home',location.hash='',rende
  split:()=>{if(v().scenes.length>=120)return toast('한 버전에는 최대 120개 장면을 추가할 수 있습니다.');const s=scene(),player=$('#player');if(!player||previewUrl)return toast('원본 재생 위치에서 분할하세요.');const t=player.currentTime,end=s.start+s.source_duration;if(t<=s.start+.05||t>=end-.05)return toast('장면 내부의 재생 위치를 선택하세요.');edit(()=>{const b=D.timing({...D.clone(s),id:D.uid()},t,end,s.playback_speed,v().settings.fps);Object.assign(s,D.timing(s,s.start,t,s.playback_speed,v().settings.fps));v().scenes.splice(v().scenes.indexOf(s)+1,0,b)})},
  original:()=>{previewUrl='';render()},preview:()=>requestRender(true),render:()=>requestRender(false),cancel:async()=>{await api('/api/cancel',{});toast('취소를 요청했습니다. 현재 작업 정리를 기다려주세요.')},
  log:async()=>{if(!engine)return toast('연결된 엔진이 없습니다.');const d=await api('/api/log');modal('생성 로그 · 오류',`<p class="tiny">경로·파일명이 포함될 수 있습니다. 외부 공유 전 개인정보를 확인하세요.</p><pre id="log-text">${esc(d.text||job.detail||'아직 기록이 없습니다.')}</pre><div class="actions"><button data-action="copy-log">로그 복사</button></div>`,true)},
- 'copy-log':()=>copy($('#log-text').textContent),save:async()=>{let localSaved=false;if(engine){const r=await api('/api/save',{project});project.revision=r.project.revision;engineRevision=r.project.revision;localSaved=true}if(user){clearTimeout(cloudSyncTimer);await saveCloudCurrent('manual');render();toast(localSaved?'로컬 편집과 Firebase 프로젝트를 저장했습니다.':'Firebase 프로젝트를 저장했습니다.')}else if(localSaved){unsaved=false;render();toast('원본 옆 업로드준비 폴더에 저장했습니다.')}else{download('norn-project.json',JSON.stringify(W.cloudData(project),null,2));toast('편집 JSON을 저장했습니다. 원본은 포함하지 않습니다.')}},
+ 'copy-log':()=>copy($('#log-text').textContent),save:saveCurrent,
  concept:conceptModal,'concept-save':()=>{saveConcept();close();render()},analyze:async()=>{saveConcept();const model=$('#model').value;if(!engine)throw Error('로컬 엔진을 연결하세요.');const r=await api('/api/concept',{project,model});project.revision=r.project.revision;engineRevision=r.project.revision;job=r.job;close();render()},
  'apply-proposal':()=>{const order=$('#reorder').checked;pushHistory();project=D.applyProposal(project,proposal,order);persist();close();render();toast('직접 수정한 문구는 보호하고 초안을 반영했습니다.')},
  newvariant:newVariant,'create-variant':()=>{if(project.variants.length>=12)throw Error('버전은 최대 12개입니다.');const mode=$('#new-mode').selectedOptions[0].textContent,name=$('#new-name').value||mode+' · 새 버전',dims=$('#new-ratio').value.split(',').map(Number);edit(()=>{const item=D.variantCopy(v(),name);item.settings.width=dims[0];item.settings.height=dims[1];project.variants.push(item);project.activeVariant=item.id;selected=item.scenes[0]?.id||''});close()},
  posting,result,channel:el=>{$('.tags button.active')?.classList.remove('active');el.classList.add('active');$('#post-text').value=postText(Number(el.dataset.value))},'copy-post':()=>copy($('#post-text').value),'save-post':()=>download('norn-post.txt',$('#post-text').value,'text/plain'),
  addfiles:addFiles,rescan:async()=>{if(!engine)return addFiles();const r=await api('/api/rescan',{});media=r.media;render();toast('원본 목록을 다시 읽었습니다. 기존 편집 순서는 유지합니다.')},
  import:()=>{const input=document.createElement('input');input.type='file';input.accept='.json';input.onchange=async()=>{try{const p=W.validateProject(JSON.parse(await input.files[0].text()));if(p.schema_version!==2||!Array.isArray(p.variants)||!p.variants.length)throw Error('NORN 프로젝트 JSON을 선택하세요. 이전 v10 편집은 엔진으로 원본 폴더를 열어 가져올 수 있습니다.');if(!confirm('현재 편집을 가져온 JSON으로 바꿀까요? 원본 미디어는 별도로 다시 연결해야 합니다.'))return;pushHistory();p.revision=project.revision||0;project=p;selected=v().scenes[0]?.id||'';persist();render()}catch(e){toast(e.message)}};input.click()},
- cloudsave:async()=>{if(!confirm('제목·설명·장면 문구·편집 설정을 Google 계정에 저장할까요? 원본 파일은 업로드하지 않습니다.'))return;clearTimeout(cloudSyncTimer);await saveCloudCurrent('manual');toast('계정에 편집 정보를 저장했습니다.');close()},
- cloudlist:async()=>{cloudRows=await Cloud.listCloud();modal('계정에 저장한 이야기',cloudRows.length?cloudRows.map(p=>`<button class="project-card" data-action="cloudload" data-id="${esc(p.id)}"><span>${esc(p.title)}</span><span class="muted tiny">열기 ↗</span></button>`).join(''):'<p>저장한 프로젝트가 없습니다.</p>')},
- cloudload:async el=>{if(unsaved&&!confirm('현재 미저장 내용을 바꾸고 클라우드 편집을 열까요?'))return;const p=await Cloud.loadCloud(el.dataset.id);cloudRevision=p.revision;p.revision=project.revision||0;project=p;selected=v().scenes[0]?.id||'';close();page='studio';render();toast('편집 정보를 불러왔습니다. 같은 원본 폴더가 필요합니다.')},
+ cloudsave:async()=>{await saveCurrent();close()},
+ cloudlist:openWorkspace,
+ cloudload:async el=>{close();await loadCloudProject(el.dataset.id)},
  prefs:async()=>{const frames=Number($('#default-frames').value);if(!Number.isInteger(frames)||frames<1||frames>20)throw Error('1~20장을 입력하세요.');await Cloud.savePreferences({frames});defaultFrames=frames;toast('기본 분석 장수를 계정에 저장했습니다.')}
 };
 function selectOffset(dir){const idx=v().scenes.findIndex(s=>s.id===selected);const target=v().scenes[idx+dir];if(target)selectScene(target.id)}
 function move(dir){const idx=v().scenes.findIndex(s=>s.id===selected),to=idx+dir;if(to<0||to>=v().scenes.length)return;edit(()=>{const [s]=v().scenes.splice(idx,1);v().scenes.splice(to,0,s)})}
 function changeTiming(key,val){const s=scene(),m=mfor(s);if(m?.kind!=='video')return;const begin=key==='start'?val:s.start,end=key==='end'?val:s.start+s.source_duration,sp=key==='speed'?val:key==='output'?(end-begin)/val:s.playback_speed;if(end>m.analysis.duration+.001)throw Error('끝점이 원본 길이를 넘습니다.');const r=D.timing(s,begin,end,sp,v().settings.fps);edit(()=>{Object.assign(s,r);s.field_locks=[...new Set([...(s.field_locks||[]),'timing'])]});if(key==='start'&&$('#player'))$('#player').currentTime=begin}
 async function copy(text){try{await navigator.clipboard.writeText(text);toast('복사했습니다.')}catch{toast('자동 복사가 차단됐습니다. 본문을 선택해 Command+C / Ctrl+C로 복사하세요.');$('#post-text')?.select()}}
-document.addEventListener('click',async e=>{const el=e.target.closest('[data-action]');if(!el)return;e.preventDefault();try{await actions[el.dataset.action]?.(el)}catch(err){modalError(err)}});
+document.addEventListener('click',async e=>{const el=e.target.closest('[data-action]');if(!el)return;e.preventDefault();if(projectLoading)return;if(!authReady&&!['close','account'].includes(el.dataset.action))return toast('계정과 저장된 프로젝트를 확인하고 있습니다. 잠시 후 다시 시도하세요.');try{await actions[el.dataset.action]?.(el)}catch(err){modalError(err)}});
 document.addEventListener('focusin',()=>{inputHistoryTarget=null});
-document.addEventListener('input',e=>{if(browserStudio?.busy())return;const el=e.target,key=el.dataset.bind,s=scene();if(!key||!s)return;let val=el.type==='checkbox'?el.checked:['number','range'].includes(el.type)?Number(el.value):el.value;if(typeof val==='number'&&!Number.isFinite(val)||s[key]===val)return;if(inputHistoryTarget!==el){pushHistory();inputHistoryTarget=el}s[key]=val;if(['name','title','caption'].includes(key))s.field_locks=[...new Set([...(s.field_locks||[]),key])];previewUrl='';persist();document.querySelectorAll(`[data-bind="${key}"]`).forEach(other=>{if(other!==el)other.value=el.value});updateOverlay()});
-document.addEventListener('change',e=>{if(browserStudio?.busy())return;try{const el=e.target;if(el.dataset.timing)changeTiming(el.dataset.timing,Number(el.value));else if(el.id==='variant'){project.activeVariant=el.value;selected=v().scenes[0]?.id||'';previewUrl='';render()}else if(el.id==='mute-all')edit(()=>v().audio.mute_original=el.checked);else if(el.id==='music')edit(()=>v().audio.music_id=el.value);else if(el.id==='music-volume')edit(()=>v().audio.music_volume=Number(el.value));else if(el.dataset.bind){persist();render()}}catch(err){toast(err.message)}});
+document.addEventListener('input',e=>{if(projectLoading||browserStudio?.busy())return;const el=e.target,key=el.dataset.bind,s=scene();if(!key||!s)return;let val=el.type==='checkbox'?el.checked:['number','range'].includes(el.type)?Number(el.value):el.value;if(typeof val==='number'&&!Number.isFinite(val)||s[key]===val)return;if(inputHistoryTarget!==el){pushHistory();inputHistoryTarget=el}s[key]=val;if(['name','title','caption'].includes(key))s.field_locks=[...new Set([...(s.field_locks||[]),key])];previewUrl='';persist();document.querySelectorAll(`[data-bind="${key}"]`).forEach(other=>{if(other!==el)other.value=el.value});updateOverlay()});
+document.addEventListener('change',e=>{if(projectLoading||browserStudio?.busy())return;try{const el=e.target;if(el.dataset.timing)changeTiming(el.dataset.timing,Number(el.value));else if(el.id==='variant'){project.activeVariant=el.value;selected=v().scenes[0]?.id||'';previewUrl='';persist();render()}else if(el.id==='mute-all')edit(()=>v().audio.mute_original=el.checked);else if(el.id==='music')edit(()=>v().audio.music_id=el.value);else if(el.id==='music-volume')edit(()=>v().audio.music_volume=Number(el.value));else if(el.dataset.bind){persist();if(['name','title','caption'].includes(el.dataset.bind))updateSceneTextLabels();else render()}}catch(err){toast(err.message)}});
 document.addEventListener('dragstart',e=>{
  const el=e.target.closest('.clip');if(!el)return;
  if(editingBusy()||e.target.closest('.clip-delete')){e.preventDefault();return}
@@ -282,6 +419,7 @@ document.addEventListener('drop',e=>{
  edit(()=>{const [s]=v().scenes.splice(from,1);v().scenes.splice(to,0,s)});focusTimeline();
 });
 document.addEventListener('keydown',e=>{
+ if(projectLoading)return;
  if(e.key==='Escape'){close();return}
  if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='s'){
   e.preventDefault();Promise.resolve().then(()=>actions.save()).catch(modalError);
@@ -302,15 +440,50 @@ document.addEventListener('keydown',e=>{
   e.preventDefault();deleteScene();
  }
 });
-window.addEventListener('resize',()=>{fitScreen();updateOverlay()});window.addEventListener('beforeunload',e=>{if(unsaved||browserStudio?.busy()||browserStudio?.hasUnsavedOutputs()){e.preventDefault();e.returnValue=''}});
-window.addEventListener('hashchange',()=>{if(location.hash==='#studio'){page='studio';render()}else if(!location.hash){page='home';render()}});
+window.addEventListener('resize',()=>{fitScreen();updateOverlay()});
+window.addEventListener('beforeunload',event=>{
+ if(localSaveError||localSaving||localSavedVersion<cloudEditVersion&&hasCurrentWork()||browserStudio?.busy()||browserStudio?.hasUnsavedOutputs()){event.preventDefault();event.returnValue=''}
+});
+// Recovery is already journaled on every edit; lifecycle events only flush queues.
+const flushBackground=()=>{if(authReady&&hasCurrentWork())flushCurrent().catch(()=>{})};
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden')flushBackground()});
+window.addEventListener('pagehide',flushBackground);
+window.addEventListener('online',()=>{if(user&&unsaved)scheduleCloudSync()});
+window.addEventListener('hashchange',()=>{
+ if(!authReady||projectLoading)return;
+ if(editingBusy()){window.history.replaceState(null,'','#studio');return}
+ if(location.hash==='#studio')enter().catch(modalError);
+ else if(!location.hash)openWorkspace().catch(error=>{window.history.replaceState(null,'','#studio');modalError(error)});
+});
 const context={D,Cloud,$,esc,modal,close,toast,api,tokenURL,render,persist,edit,download,
- actions,variant:v,scene,progress,emptyProject,samples,requestRender,changeTiming,connectModal,connectTo,url,showProposal,copy,modalError,openWorkspace,
+ actions,variant:v,scene,progress,emptyProject,samples,requestRender,changeTiming,connectModal,connectTo,url,showProposal,copy,modalError,openWorkspace,saveCurrent,flushCurrent,scheduleCloudSync,createNewProject,loadCloudProject,deleteProject,
  read:()=>({project,media,selected,engine,user,job,proposal,cloudRevision,engineRevision,unsaved,previewUrl,page}),
- assign:values=>{if('project'in values){project=values.project;if(Number.isFinite(project.revision))engineRevision=project.revision;}if('media'in values)media=values.media;if('selected'in values)selected=values.selected;if('job'in values)job=values.job;if('proposal'in values)proposal=values.proposal;if('cloudRevision'in values)cloudRevision=values.cloudRevision;if('unsaved'in values)unsaved=values.unsaved;if('previewUrl'in values)previewUrl=values.previewUrl;if('page'in values)page=values.page;if('engine'in values)engine=values.engine;if('catalog'in values)catalog=values.catalog;if(values.clearHistory){history=[];redo=[];}}
+ assign:values=>{if('project'in values){if(project.id!==values.project.id){clearTimeout(cloudSyncTimer);cloudRevision=0;cloudEditVersion=0;localSavedVersion=-1;localSaveError='';cloudSaveError='';if(user)sessionStorage.setItem('norn.cloud.project',values.project.id)}project=values.project;if(Number.isFinite(project.revision))engineRevision=project.revision;}if('media'in values)media=values.media;if('selected'in values)selected=values.selected;if('job'in values)job=values.job;if('proposal'in values)proposal=values.proposal;if('cloudRevision'in values)cloudRevision=values.cloudRevision;if('unsaved'in values)unsaved=values.unsaved;if('previewUrl'in values)previewUrl=values.previewUrl;if('page'in values)page=values.page;if('engine'in values)engine=values.engine;if('catalog'in values)catalog=values.catalog;if(values.clearHistory){history=[];redo=[];}}
 };
 plus=installStudioPlus(context);
 browserStudio=installBrowserStudio(context);
 render();
-(async()=>{const hash=location.hash;if(hash.startsWith('#connect=')){const [url,token]=decodeURIComponent(hash.slice(9)).split('|');historyReplace();try{await connectTo(url,token)}catch(e){toast(e.message);connectModal()}}else{if(hash==='#studio'){page='studio';restoreGuest();render()}/* A saved localhost token never triggers a connection on normal website entry. */}Cloud.observe(async next=>{const old=user?.uid;if(old&&old!==next?.uid){engine=null;sessionStorage.removeItem('norn.engine');sessionStorage.removeItem('norn.cloud.project');browserStudio?.reset();project=emptyProject();media=[];history=[];redo=[];selected='';cloudRevision=0;}user=next;if(next)Cloud.loadPreferences().then(p=>{if(p?.frames)defaultFrames=p.frames}).catch(()=>{});if(next&&interactiveLogin)return;if(next&&page==='home'){routeLoggedInHome().catch(e=>{console.warn('NORN workspace route:',e);render()});return}if(next&&page==='studio'&&cloudRevision===0){const id=sessionStorage.getItem('norn.cloud.project');if(id){try{await loadCloudProject(id,{notify:false});return}catch(e){sessionStorage.removeItem('norn.cloud.project');toast('이전 프로젝트를 다시 열지 못했습니다: '+(e.message||e))}}if(!hasCurrentWork()){page='home';location.hash='';await refreshWorkspace(false);render();return}}render()}).catch(()=>{});setInterval(poll,1200)})();
+let firstAuth=true;
+async function onAccount(next){
+ if(authAction)return;
+ const old=user?.uid,first=firstAuth;firstAuth=false;
+ if(old&&old!==next?.uid){
+  clearTimeout(cloudSyncTimer);await cacheCurrent().catch(()=>{});resetCurrent();sessionStorage.removeItem('norn.cloud.project');
+ }
+ user=next;authReady=true;localRows=[];cloudRows=[];
+ if(next)Cloud.loadPreferences().then(p=>{if(p?.frames)defaultFrames=p.frames}).catch(()=>{});
+ if(first&&location.hash.startsWith('#connect=')){
+  const [address,token]=decodeURIComponent(location.hash.slice(9)).split('|');historyReplace();
+  try{await connectTo(address,token)}catch(error){toast(error.message);connectModal()}return;
+ }
+ if(first&&location.hash==='#studio'){
+  if(next){const id=sessionStorage.getItem('norn.cloud.project')||Local.getLast(ownerKey());if(id){try{await loadCloudProject(id,{notify:false,flush:false});return}catch(error){toast('이전 프로젝트 복원 확인: '+error.message)}}}
+  else{await restoreGuest();page='studio';render();return}
+ }
+ page='home';if(next)await routeLoggedInHome();else await refreshWorkspace(true);
+}
+Cloud.observe(next=>{onAccount(next).catch(error=>{authReady=true;modalError(error);render()})}).catch(error=>{
+ cloudSaveError=error.message;onAccount(null).catch(()=>{authReady=true;render()});
+});
+setInterval(poll,1200);
 function historyReplace(){window.history.replaceState(null,'','#studio')}

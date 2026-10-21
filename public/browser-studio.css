@@ -643,3 +643,10 @@
     height: 44px;
   }
 }
+
+/* Save state stays visible on touch screens and after editor rerenders. */
+#save-status { display:inline-block; max-width:24rem; color:var(--muted); white-space:normal; line-height:1.4; }
+#save-status[data-state="saved"] { color:#45705a; }
+#save-status[data-state="error"] { color:#a4392c; font-weight:600; }
+#save-status[data-state="pending"], #save-status[data-state="saving"] { color:#8a601d; }
+@media(max-width:760px) { .studio .toolbar #save-status { flex-basis:100%; max-width:none; font-size:10px; order:5; } }

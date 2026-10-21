@@ -1,5 +1,5 @@
 /** Firestore repository shared by the browser and emulator integration tests. */
-import {cloudData,validId} from './workspace.js';
+import {cloudData,validId} from './workspace.js?v=0.6.0';
 export function createCloudStore({sdk,db,currentUid}){
  const user=()=>{const uid=currentUid();if(!uid)throw Error('Google 로그인이 필요합니다.');return uid};
  const root=id=>{if(!validId(id))throw Error('프로젝트 ID 오류');return sdk.doc(db,'users',user(),'projects',id)};
