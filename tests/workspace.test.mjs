@@ -32,3 +32,13 @@ test('browser studio does not override the workspace new-project action',async()
  assert.ok(source.includes("button('local-new-project','새 이야기'"),'Local editor button must target its private action.');
  assert.ok(!source.includes("'new-project':()=>{assertIdle()"),'Browser editor must not hijack the workspace new-project action.');
 });
+
+
+test('logged-in users with zero cloud projects start editing instead of seeing an empty workspace',async()=>{
+ const {readFile}=await import('node:fs/promises');
+ const source=await readFile(new URL('../public/app.js',import.meta.url),'utf8');
+ assert.ok(source.includes('async function routeLoggedInHome'), 'Logged-in home routing helper must exist.');
+ assert.ok(source.includes('if(cloudRows.length===0){\n   await createNewProject();'), 'Zero-project accounts must start a project immediately.');
+ assert.ok(source.includes("await routeLoggedInHome({notify:true})"), 'Interactive login must use project-aware home routing.');
+ assert.ok(source.includes("if(next&&page==='home'){routeLoggedInHome()"), 'Auth restoration must use the same project-aware routing.');
+});
