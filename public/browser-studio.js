@@ -250,7 +250,7 @@ export function installBrowserStudio(C) {
       if(!state().media.length){const empty=document.createElement('div');empty.className='local-drop-hint';empty.textContent='여기에 사진·영상이나 폴더를 끌어놓으세요.';$('.library-grid')?.append(empty);}
       const info=document.createElement('div');info.className='local-library-info';
       info.textContent='원본은 선택한 위치에 그대로 있어요.';library.append(info);
-      library.querySelector('.library-more')?.insertAdjacentHTML('beforeend',button('import-report','불러오기 결과','ghost small')+button('new-project','새 이야기','ghost small'));
+      library.querySelector('.library-more')?.insertAdjacentHTML('beforeend',button('import-report','불러오기 결과','ghost small')+button('local-new-project','새 이야기','ghost small'));
     }
     const nav=$('#workflow-nav');if(nav){nav.innerHTML=button('connect','1 자료 추가')+button('focus-timeline','2 장면 편집')+button('render','3 영상 저장');}
     if(state().media.length===0&&state().project.variants.some(v=>v.scenes.length)&&!$('#local-relink-banner')){
@@ -276,7 +276,7 @@ export function installBrowserStudio(C) {
     addfiles:()=>selectFiles(),addfolder:()=>selectFiles({folder:true}),addaudio:()=>selectFiles({audio:true}),'relink-files':()=>selectFiles({relink:true}),
     rescan:()=>localMode()?selectFiles({relink:true}):previous.rescan(),'import-report':showImportReport,
     demo:()=>{assertIdle();if((state().unsaved||hasUnsavedOutputs())&&!confirm('현재 편집 대신 예제를 열까요?'))return;reset();detachEngine();C.assign({project:D.demoProject(),media:C.samples(),selected:'',job:{status:'idle'},previewUrl:'',clearHistory:true});C.assign({selected:variant().scenes[0]?.id||''});openStudio();render();},
-    'new-project':()=>{assertIdle();if((state().unsaved||hasUnsavedOutputs())&&!confirm('현재 편집을 닫고 새 이야기를 시작할까요? 원본과 다운로드한 파일은 그대로 있습니다.'))return;reset();detachEngine();C.assign({project:C.emptyProject(),media:[],selected:'',job:{status:'idle'},previewUrl:'',clearHistory:true,cloudRevision:0});persist();render();},
+    'local-new-project':()=>{assertIdle();if((state().unsaved||hasUnsavedOutputs())&&!confirm('현재 편집을 닫고 새 이야기를 시작할까요? 원본과 다운로드한 파일은 그대로 있습니다.'))return;reset();detachEngine();C.assign({project:C.emptyProject(),media:[],selected:'',job:{status:'idle'},previewUrl:'',clearHistory:true,cloudRevision:0});persist();render();},
     import:()=>localMode()?importProject():previous.import(),
     save:async()=>{assertIdle();if(!localMode())return previous.save();downloadBlob(safeFileName(state().project.title)+'-norn-project.json',new Blob([JSON.stringify(snapshot(),null,2)],{type:'application/json'}));C.assign({unsaved:false});render();toast('편집 JSON을 저장했습니다. 원본은 포함하지 않습니다.');},
     backup:()=>localMode()?C.actions.save():previous.backup(),
