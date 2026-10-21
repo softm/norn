@@ -42,3 +42,12 @@ test('logged-in users with zero cloud projects start editing instead of seeing a
  assert.ok(source.includes("await routeLoggedInHome({notify:true})"), 'Interactive login must use project-aware home routing.');
  assert.ok(source.includes("if(next&&page==='home'){routeLoggedInHome()"), 'Auth restoration must use the same project-aware routing.');
 });
+
+
+test('interactive login owns post-login routing to avoid duplicate project creation',async()=>{
+ const {readFile}=await import('node:fs/promises');
+ const source=await readFile(new URL('../public/app.js',import.meta.url),'utf8');
+ assert.ok(source.includes('interactiveLogin=true;try{const signedIn=await Cloud.login();'));
+ assert.ok(source.includes('finally{interactiveLogin=false;'));
+ assert.ok(source.includes('if(next&&interactiveLogin)return;'), 'Auth observer must not race the interactive login route.');
+});
