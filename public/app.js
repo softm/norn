@@ -259,7 +259,7 @@ async function loadCloudProject(id,{notify=true,flush=true}={}){
   }
   const candidates=[...(local?.media||[]),...media];
   const matched=W.projectMedia(source,candidates).filter((item,index,all)=>all.findIndex(other=>other.id===item.id)===index);
-  if(source.variants.some(v=>v.scenes.some(s=>s.source_id.startsWith('sample'))))matched.push(...samples());
+  if(source.variants.some(v=>v.scenes.some(s=>s.source_id.startsWith('sample'))))for(const item of samples())if(!matched.some(m=>m.id===item.id))matched.push(item);
   const linked=W.relinkProject(source,matched),usedURLs=new Set(matched.flatMap(m=>[m.url,m.thumb_url]));
   revokeMedia(candidates.filter(m=>!usedURLs.has(m.url)));
   browserStudio?.resetProjectState();engine=null;engineRevision=0;sessionStorage.removeItem('norn.engine');

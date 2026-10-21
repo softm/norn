@@ -93,8 +93,11 @@ def fixture(directory):
 
 
 def watch(context, base, owner=""):
+    # Init scripts also run on about:blank, whose opaque origin cannot use
+    # localStorage. Only seed the test server; real app-origin errors still fail.
     # Runs on reload too; an existing owner switch must remain effective.
-    context.add_init_script("if(localStorage.getItem('norn.test.uid')===null)"
+    context.add_init_script("if(location.origin===" + json.dumps(base) +
+                            "&&localStorage.getItem('norn.test.uid')===null)"
                             "localStorage.setItem('norn.test.uid'," + json.dumps(owner) + ");")
 
     def route_request(route):
@@ -209,7 +212,7 @@ def browser_runtime():
             yield playwright
         except Exception:
             REPORT["failure"] = traceback.format_exc()
-            if page:
+            if page and not page.is_closed():
                 try:
                     page.screenshot(path=str(OUT / "failure.png"), full_page=True, timeout=3000)
                     REPORT["visibleFailureState"] = page.locator("body").inner_text()[-5000:]
@@ -376,7 +379,8 @@ try:
             # a draft here would hide the failure and accumulate bogus projects.
             context = browser.new_context(viewport={"width": 1280, "height": 950})
             watch(context, base, OWNER)
-            context.add_init_script("localStorage.setItem('norn.test.listFailure','true')")
+            context.add_init_script("if(location.origin===" + json.dumps(base) + ")"
+                                    "localStorage.setItem('norn.test.listFailure','true')")
             page = context.new_page()
             page.goto(base + "/", wait_until="networkidle")
             page.wait_for_selector(".project-workspace")
