@@ -109,6 +109,20 @@ function workspaceHome(){
  app.innerHTML=`<header class="topbar project-topbar">${brand()}<nav><button class="ghost small" data-action="workspace-refresh">새로고침</button><button class="small" data-action="account">${esc(user?.displayName||'내 계정')}</button></nav></header><main class="project-workspace"><section class="project-workspace-hero"><div><span class="eyebrow">NORN PROJECT WORKSPACE</span><h1>내 영상 프로젝트</h1><p>영상 작업 하나를 하나의 프로젝트로 저장합니다. 프로젝트를 다시 열면 제목·장면·자막·효과·음악 설정을 이어서 편집할 수 있습니다.</p></div><button class="primary project-create-main" data-action="new-project">＋ 새 프로젝트</button></section><section class="project-list-section"><div class="project-list-head"><div><h2>프로젝트</h2><p class="muted">Firebase에 저장된 작업 ${rows.length}개 · 원본 사진·영상은 내 컴퓨터에 유지</p></div></div><div class="project-grid"><button class="project-new-card" data-action="new-project"><span class="project-plus">＋</span><strong>새 프로젝트</strong><small>새 영상 작업 시작</small></button>${rows.map(row=>`<article class="workspace-project-card"><button class="project-open-area" data-action="project-open" data-id="${esc(row.id)}"><span class="project-cover" aria-hidden="true">${esc((row.title||'N').trim().slice(0,1).toUpperCase())}</span><span class="project-card-body"><strong>${esc(row.title||'제목 없는 프로젝트')}</strong><small>최근 작업 · ${cloudTime(row.updatedAt)}</small><span class="project-meta">버전 ${row.variantIds?.length||0} · 자료 ${row.assets?.length||0} · r${row.revision||0}</span></span></button><div class="project-card-actions"><button class="ghost small" data-action="project-history" data-id="${esc(row.id)}" data-title="${esc(row.title||'프로젝트')}">이력</button><button class="danger small" data-action="project-delete" data-id="${esc(row.id)}" data-revision="${row.revision||0}">삭제</button></div></article>`).join('')}</div></section></main>`;
 }
 async function openWorkspace(){if(!user){page='home';location.hash='';render();return account()}clearTimeout(cloudSyncTimer);await waitCloudSync();if(unsaved){try{await saveCloudCurrent('autosave')}catch(e){if(!confirm('현재 프로젝트의 Firebase 저장이 완료되지 않았습니다. 그래도 프로젝트 목록으로 이동할까요?'))return}}page='home';location.hash='';await refreshWorkspace(false);render()}
+async function createNewProject(title=''){
+ if(!user)throw Error('로그인이 필요합니다.');
+ clearTimeout(cloudSyncTimer);
+ await waitCloudSync();
+ browserStudio?.reset();
+ project=emptyProject();
+ const now=new Date();
+ project.title=(title||`새 프로젝트 · ${now.toLocaleDateString('ko-KR',{month:'numeric',day:'numeric'})} ${now.toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'})}`).slice(0,160);
+ media=[];selected='';history=[];redo=[];previewUrl='';engineRevision=0;cloudRevision=0;cloudEditVersion=0;unsaved=true;
+ await saveCloudCurrent('manual');
+ sessionStorage.setItem('norn.cloud.project',project.id);
+ close();page='studio';location.hash='studio';render();
+ toast('새 프로젝트를 만들었습니다. 사진·영상을 추가하세요.');
+}
 async function loadCloudProject(id,{notify=true}={}){
  if(!user)throw Error('로그인이 필요합니다.');
  if(!W.validId(id))throw Error('프로젝트 ID 오류');
@@ -192,8 +206,8 @@ async function updateOverlay(){clearTimeout(overlayTimer);if(previewUrl||!scene(
 async function addFiles(){return browserStudio?.selectFiles?.()}
 const actions={home:()=>user?openWorkspace():(page='home',location.hash='',render()),enter,guest:()=>{close();enter()},close,account,connect:connectModal,
  'workspace-refresh':()=>refreshWorkspace(),
- 'new-project':()=>{if(!user)return account();modal('새 프로젝트',`<span class="eyebrow">NEW PROJECT</span><p>하나의 영상 작업을 하나의 프로젝트로 관리합니다.</p><label>프로젝트 이름<input id="new-project-title" maxlength="160" placeholder="예: 2026 들깨 수확 영상" autofocus></label><div class="actions"><button data-action="close">취소</button><button class="primary" data-action="create-project">프로젝트 만들기</button></div>`)},
- 'create-project':async()=>{if(!user)throw Error('로그인이 필요합니다.');const title=($('#new-project-title')?.value||'').trim();if(!title)throw Error('프로젝트 이름을 입력하세요.');clearTimeout(cloudSyncTimer);await waitCloudSync();browserStudio?.reset();project=emptyProject();project.title=title;media=[];selected='';history=[];redo=[];previewUrl='';engineRevision=0;cloudRevision=0;cloudEditVersion=0;unsaved=true;await saveCloudCurrent('manual');sessionStorage.setItem('norn.cloud.project',project.id);close();page='studio';location.hash='studio';render();toast('프로젝트를 만들었습니다. 이제 사진·영상을 추가하세요.')},
+ 'new-project':async()=>{if(!user)return account();await createNewProject()},
+ 'create-project':async()=>createNewProject(($('#new-project-title')?.value||'').trim()),
  'project-open':async el=>loadCloudProject(el.dataset.id),
  'project-delete':async el=>{if(!confirm('이 프로젝트의 Firebase 편집 정보를 삭제할까요? 로컬 원본 파일은 삭제하지 않습니다.'))return;await Cloud.deleteCloud(el.dataset.id,Number(el.dataset.revision));if(sessionStorage.getItem('norn.cloud.project')===el.dataset.id)sessionStorage.removeItem('norn.cloud.project');await refreshWorkspace();toast('프로젝트를 삭제했습니다.')},
  'project-history':async el=>{const rows=await Cloud.listHistory(el.dataset.id),labels={autosave:'자동 저장',manual:'직접 저장',restore:'복원','quick-maker':'자동 제작',render:'영상 생성'};const body=rows.length?'<div class="project-history">'+rows.map(row=>'<div class="history-row"><span><strong>r'+row.revision+'</strong> · '+(labels[row.event]||'저장')+'</span><small>'+cloudTime(row.createdAt)+'</small></div>').join('')+'</div>':'<p>저장된 세부 이력이 없습니다.</p>';modal((el.dataset.title||'프로젝트')+' · 작업 이력',body)},
