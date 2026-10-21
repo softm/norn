@@ -23,3 +23,12 @@ test('project media isolation retains only files belonging to the opened project
  assert.deepEqual(W.projectMedia(project,media).map(x=>x.id),['b']);
  assert.deepEqual(W.projectMedia({assets:[]},media),[]);
 });
+
+
+test('browser studio does not override the workspace new-project action',async()=>{
+ const {readFile}=await import('node:fs/promises');
+ const source=await readFile(new URL('../public/browser-studio.js',import.meta.url),'utf8');
+ assert.ok(source.includes("'local-new-project':"),'Local editor must use its own new-story action.');
+ assert.ok(source.includes("button('local-new-project','새 이야기'"),'Local editor button must target its private action.');
+ assert.ok(!source.includes("'new-project':()=>{assertIdle()"),'Browser editor must not hijack the workspace new-project action.');
+});
