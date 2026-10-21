@@ -1,5 +1,5 @@
 import * as D from './domain.js';
-import * as Cloud from './firebase-v2.js';
+import * as Cloud from './firebase-v2.js?v=0.5.1';
 import * as W from './workspace.js';
 import {installStudioPlus} from './studio-plus.js?v=0.5.1';
 import {installBrowserStudio} from './browser-studio.js?v=0.5.1';
