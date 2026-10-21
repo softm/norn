@@ -527,7 +527,10 @@ try:
                 page.locator(".clip-select").nth(2).click()
                 page.locator("[data-action=moveleft]").click()
                 assert "02-video" in page.locator(".clip-top").nth(1).inner_text()
-                saved = download(page, "[data-action=save]", "project.json")
+                # Saving the project and exporting a portable JSON backup are
+                # different operations. Only the explicit backup downloads.
+                reveal(page, "[data-action=backup]")
+                saved = download(page, "[data-action=backup]", "project.json")
                 snapshot = json.loads(saved.read_text(encoding="utf-8"))
                 variant = active(snapshot)
                 assert variant["scenes"][2]["caption"] == "사진·영상·원음을 직접 편집했습니다."
@@ -537,6 +540,20 @@ try:
                 REPORT["fixture"] = {"sourceWidth": 640, "sourceHeight": 480,
                                      "sceneDurations": [row["duration"] for row in variant["scenes"]]}
                 assert "blob:" not in saved.read_text(encoding="utf-8")
+                # A normal reload must retain both editing metadata and actual
+                # local media, including the unused soundtrack in the library.
+                # The later clean-context JSON test still verifies relinking on
+                # another browser where these original bytes do not exist.
+                page.reload(wait_until="networkidle")
+                page.wait_for_function("document.querySelectorAll('.asset').length === 3 && document.querySelectorAll('.clip').length === 3")
+                assert not page.locator("#local-relink-banner").count()
+                assert active(project(page))["scenes"] == variant["scenes"]
+                assert project(page)["assets"] == snapshot["assets"]
+                assert len(project(page)["assets"]) == 4
+                reveal(page, "#music")
+                assert page.locator('#music option:not([value=""])').count() == 1
+                assert page.locator("#music").input_value() == ""
+                REPORT["checks"].append("same-browser reload restores original image/video/audio resources and every edited scene without file reselection")
                 page.screenshot(path=str(OUT / "edited.png"), full_page=True)
                 REPORT["checks"].append("scene order, caption, fractional video duration and source-audio settings persist to JSON")
 

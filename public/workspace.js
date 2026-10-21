@@ -6,16 +6,37 @@ const idPattern=/^[A-Za-z0-9_-]{1,80}$/;
 export function validId(value){return typeof value==='string'&&idPattern.test(value)}
 export function analysisOptions(input={}){const number=(key,fallback,min,max)=>{const n=Number(input[key]??fallback);return Number.isFinite(n)?Math.min(max,Math.max(min,Math.floor(n))):fallback};return {imageLimit:number('imageLimit',100,1,600),frameSize:number('frameSize',640,256,960),maxScenes:number('maxScenes',12,1,120),seed:number('seed',0,0,999999),order:['concept','source','current'].includes(input.order)?input.order:'concept',scope:['folder','timeline'].includes(input.scope)?input.scope:'folder',fullVideo:Boolean(input.fullVideo)}}
 export function makeVariant(base,{mode='short',name='',width,height,targetDuration,empty=false}={}){const preset=modes[mode]||modes.short;const v=D.variantCopy(base,name.trim()||preset.label);v.mode=mode in modes?mode:'short';v.targetDuration=Number(targetDuration)||preset.seconds;v.settings={...v.settings,width:Number(width)||preset.width,height:Number(height)||preset.height};if(empty)v.scenes=[];return v}
-export function assetManifest(media){return media.filter(m=>['image','video','audio'].includes(m.kind)&&/^[a-f0-9]{64}$/.test(m.sha256||'')).map(m=>({id:m.id,sha256:m.sha256,kind:m.kind,size:m.size})).slice(0,600)}
-export function projectMedia(project,media){
- const assets=project?.assets||[];
- if(!assets.length)return [];
- return media.filter(m=>assets.some(a=>m.id===a.id||(a.sha256&&m.sha256===a.sha256&&a.kind===m.kind&&a.size===m.size)));
+const validAsset=a=>a&&validId(a.id)&&['image','video','audio'].includes(a.kind)&&/^[a-f0-9]{64}$/.test(a.sha256||'')&&Number.isSafeInteger(a.size)&&a.size>=0;
+const sameAsset=(a,b)=>a.sha256===b.sha256&&a.kind===b.kind&&a.size===b.size;
+export function assetManifest(media){
+ const assets=new Map();
+ for(const m of media.filter(validAsset)){
+  const previous=assets.get(m.id);
+  if(previous&&!sameAsset(previous,m))throw Error('같은 자료 ID에 다른 파일이 연결되어 있습니다. 원본을 다시 확인하세요.');
+  assets.set(m.id,{id:m.id,sha256:m.sha256,kind:m.kind,size:m.size});
+ }
+ if(assets.size>600)throw Error('자료 보관함은 최대 600개입니다. 프로젝트를 나눠 저장하세요.');
+ return [...assets.values()];
 }
-export function relinkProject(project,media){const p=D.clone(project),byId=new Map(media.map(m=>[m.id,m])),old=new Map((p.assets||[]).map(m=>[m.id,m]));const map=new Map(),missing=[],ambiguous=[];
- for(const sid of new Set(p.variants.flatMap(v=>[...v.scenes.map(s=>s.source_id),v.audio?.music_id].filter(Boolean)))){if(byId.has(sid)){map.set(sid,sid);continue}const expected=old.get(sid);const matches=expected?media.filter(m=>m.sha256===expected.sha256&&m.kind===expected.kind&&m.size===expected.size):[];if(matches.length===1)map.set(sid,matches[0].id);else if(matches.length>1)ambiguous.push(sid);else missing.push(sid)}
+export function projectMedia(project,media){
+ const assets=(project?.assets||[]).filter(validAsset);
+ if(!assets.length)return [];
+ return media.filter(m=>assets.some(a=>sameAsset(a,m)));
+}
+export function relinkProject(project,media){const p=D.clone(project),byId=new Map(media.map(m=>[m.id,m])),available=assetManifest(media),old=new Map(assetManifest(p.assets||[]).map(m=>[m.id,m]));const map=new Map(),missing=[],ambiguous=[];
+ const referenced=new Set(p.variants.flatMap(v=>[...v.scenes.map(s=>s.source_id),v.audio?.music_id].filter(Boolean)));
+ // Resolve the entire library, including files not currently used by a scene or music track.
+ for(const sid of new Set([...referenced,...old.keys()])){
+  const expected=old.get(sid),direct=byId.get(sid);
+  if(direct&&(!expected||sameAsset(expected,direct))){map.set(sid,sid);continue}
+  const matches=expected?available.filter(m=>sameAsset(expected,m)):[];
+  if(matches.length===1)map.set(sid,matches[0].id);
+  else if(referenced.has(sid)){if(matches.length>1)ambiguous.push(sid);else missing.push(sid)}
+ }
  for(const v of p.variants){for(const s of v.scenes)if(map.has(s.source_id))s.source_id=map.get(s.source_id);if(map.has(v.audio?.music_id))v.audio.music_id=map.get(v.audio.music_id)}
- const keep=new Set([...missing,...ambiguous]);p.assets=[...assetManifest(media),...(project.assets||[]).filter(a=>keep.has(a.id)&&!byId.has(a.id))];return {project:p,missing,ambiguous,matched:map.size};}
+ // Absence of bytes is not a deletion. Retain the old manifest until a unique reconnect replaces it.
+ p.assets=assetManifest([...available,...[...old.values()].filter(a=>!map.has(a.id))]);
+ return {project:p,missing,ambiguous,matched:[...referenced].filter(id=>map.has(id)).length};}
 export function validateProject(p){if(!p||p.schema_version!==2||!validId(p.id)||!Array.isArray(p.variants)||p.variants.length<1||p.variants.length>12)throw Error('노른 프로젝트 파일을 확인하세요.');if(typeof p.title!=='string'||p.title.length>160||typeof p.description!=='string'||p.description.length>6000)throw Error('프로젝트 제목·설명 길이를 확인하세요.');const ids=new Set();for(const v of p.variants){if(!validId(v.id)||ids.has(v.id)||!Array.isArray(v.scenes)||v.scenes.length>120)throw Error('출력 버전과 장면 수를 확인하세요.');ids.add(v.id);if(!v.settings||![v.settings.width,v.settings.height,v.settings.fps].every(Number.isFinite)||v.settings.width<144||v.settings.width>3840||v.settings.height<144||v.settings.height>3840||v.settings.fps<10||v.settings.fps>60)throw Error('해상도·프레임 설정 오류');const rows=new Set();for(const s of v.scenes){if(!validId(s.id)||rows.has(s.id)||!validId(s.source_id))throw Error('장면 ID 오류');rows.add(s.id);for(const [k,max] of [['name',100],['title',100],['caption',240]])if(typeof s[k]!=='string'||s[k].length>max)throw Error('장면 글씨 길이를 확인하세요.');for(const k of ['start','duration','source_duration','playback_speed'])if(!Number.isFinite(s[k]))throw Error('장면 시간 정보 오류');if(s.start<0||s.duration<=0||s.source_duration<=0||s.playback_speed<.1||s.playback_speed>3600)throw Error('장면 구간·배속 범위 오류')}}if(!ids.has(p.activeVariant))throw Error('선택한 출력 버전이 없습니다.');return p}
 export function cloudData(p){validateProject(p);const q=D.cloudProject(p);q.assets=(p.assets||[]).filter(a=>validId(a.id)&&/^[a-f0-9]{64}$/.test(a.sha256)&&['image','video','audio'].includes(a.kind)&&Number.isSafeInteger(a.size)).map(({id,sha256,kind,size})=>({id,sha256,kind,size}));q.analysis=analysisOptions(p.analysis);q.publicNote=String(p.publicNote??'').slice(0,6000);q.posts=Object.fromEntries(Object.entries(p.posts||{}).filter(([key,value])=>q.variants.some(v=>v.id===key)&&value&&typeof value==='object').map(([key,value])=>[key,Object.fromEntries(channelList.filter(([ch])=>typeof value[ch]==='string').map(([ch])=>[ch,value[ch].slice(0,12000)]))]));q.variants.forEach((v,i)=>{v.mode=p.variants[i].mode in modes?p.variants[i].mode:'free';v.targetDuration=Math.min(3600,Math.max(1,Number(p.variants[i].targetDuration)||p.targetDuration||30))});return q}
 export function sceneSequence(v){let t=0;return v.scenes.map((s,i)=>{const fade=i<v.scenes.length-1&&s.transition!=='cut'?Math.min(s.transition_duration,s.duration/2,v.scenes[i+1].duration/2):0;const item={id:s.id,start:t,end:t+s.duration,overlap:fade};t+=s.duration-fade;return item})}

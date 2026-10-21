@@ -1,6 +1,6 @@
 /** Output files are generated data. Original media never enters the download package. */
-import * as W from './workspace.js';
-import {safeFileName} from './local-media.js';
+import * as W from './workspace.js?v=0.6.0';
+import {safeFileName} from './local-media.js?v=0.6.0';
 
 const encoder = new TextEncoder();
 const crcTable = new Uint32Array(256);

@@ -283,7 +283,7 @@ export async function readLocalFiles(files, { existing = [], signal, onProgress 
         if (poster) owned.thumb_url = URL.createObjectURL(poster);
         assets.push({
           id: 'local-' + sha256, sha256, size: file.size, relative_path: name,
-          kind, url: owned.url, thumb_url: owned.thumb_url, analysis, file, local: true,
+          kind, url: owned.url, thumb_url: owned.thumb_url, thumbBlob: poster || null, analysis, file, local: true,
         });
         fingerprints.add(sha256);
         owned = null;

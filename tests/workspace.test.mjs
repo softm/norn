@@ -24,6 +24,67 @@ test('project media isolation retains only files belonging to the opened project
  assert.deepEqual(W.projectMedia({assets:[]},media),[]);
 });
 
+test('opening without local bytes retains the complete library, including unused images and music',()=>{
+ const p=D.demoProject();
+ p.variants[0].scenes=[];
+ p.assets=[
+  {id:'unused-image',sha256:'a'.repeat(64),kind:'image',size:10},
+  {id:'unused-audio',sha256:'b'.repeat(64),kind:'audio',size:20}
+ ];
+ const opened=W.relinkProject(p,[]).project;
+ const saved=W.cloudData(opened);
+ assert.deepEqual(saved.assets,p.assets);
+ assert.deepEqual(W.relinkProject(saved,[]).project.assets,p.assets);
+});
+
+test('reconnecting a library-only file replaces content aliases without retaining duplicates',()=>{
+ const p=D.demoProject();p.variants[0].scenes=[];
+ const fingerprint={sha256:'a'.repeat(64),kind:'image',size:10};
+ p.assets=[{id:'old-id',...fingerprint},{id:'old-alias',...fingerprint}];
+ const local={id:'reconnected',...fingerprint,relative_path:'photo.jpg',url:'blob:local-only'};
+ const linked=W.relinkProject(p,[local,local]);
+ assert.deepEqual(linked.project.assets,[{id:'reconnected',...fingerprint}]);
+ assert.equal(p.assets.length,2,'Relinking must not mutate the previous project snapshot.');
+});
+
+test('reconnecting one file preserves other library-only resources and their later relink identity',()=>{
+ const p=D.demoProject();p.variants[0].scenes=[];
+ p.assets=[
+  {id:'photo',sha256:'a'.repeat(64),kind:'image',size:10},
+  {id:'music',sha256:'b'.repeat(64),kind:'audio',size:20}
+ ];
+ const first=W.relinkProject(p,[{...p.assets[0],id:'photo-connected'}]).project;
+ assert.equal(first.assets.length,2);
+ assert.ok(first.assets.some(a=>a.id==='music'));
+ const second=W.relinkProject(first,[{...p.assets[1],id:'music-connected'}]).project;
+ assert.equal(second.assets.length,2);
+ assert.ok(second.assets.some(a=>a.id==='photo-connected'));
+ assert.ok(second.assets.some(a=>a.id==='music-connected'));
+});
+
+test('project media isolation rejects same-ID foreign bytes and hash matches with different kind or size',()=>{
+ const asset={id:'saved',sha256:'a'.repeat(64),kind:'video',size:20};
+ const p={assets:[asset]};
+ const candidates=[
+  {...asset,sha256:'b'.repeat(64)},
+  {...asset,id:'wrong-kind',kind:'audio'},
+  {...asset,id:'wrong-size',size:21},
+  {...asset,id:'correct'}
+ ];
+ assert.deepEqual(W.projectMedia(p,candidates).map(a=>a.id),['correct']);
+});
+
+test('a full retained library rejects additions instead of silently losing absent originals',()=>{
+ const p=D.demoProject();p.variants[0].scenes=[];
+ p.assets=Array.from({length:600},(_,i)=>({id:'asset-'+i,sha256:i.toString(16).padStart(64,'0'),kind:'image',size:i+1}));
+ assert.equal(W.relinkProject(p,[]).project.assets.length,600);
+ const reconnected={...p.assets[0],id:'reconnected'};
+ assert.equal(W.relinkProject(p,[reconnected]).project.assets.length,600);
+ const additional={id:'extra',sha256:'f'.repeat(64),kind:'image',size:1000};
+ assert.throws(()=>W.relinkProject(p,[additional]),/600/);
+ assert.equal(p.assets.length,600);
+});
+
 
 test('browser studio does not override the workspace new-project action',async()=>{
  const {readFile}=await import('node:fs/promises');
@@ -34,20 +95,5 @@ test('browser studio does not override the workspace new-project action',async()
 });
 
 
-test('logged-in users with zero cloud projects start editing instead of seeing an empty workspace',async()=>{
- const {readFile}=await import('node:fs/promises');
- const source=await readFile(new URL('../public/app.js',import.meta.url),'utf8');
- assert.ok(source.includes('async function routeLoggedInHome'), 'Logged-in home routing helper must exist.');
- assert.ok(source.includes('if(cloudRows.length===0){\n   await createNewProject();'), 'Zero-project accounts must start a project immediately.');
- assert.ok(source.includes("await routeLoggedInHome({notify:true})"), 'Interactive login must use project-aware home routing.');
- assert.ok(source.includes("if(next&&page==='home'){routeLoggedInHome()"), 'Auth restoration must use the same project-aware routing.');
-});
-
-
-test('interactive login owns post-login routing to avoid duplicate project creation',async()=>{
- const {readFile}=await import('node:fs/promises');
- const source=await readFile(new URL('../public/app.js',import.meta.url),'utf8');
- assert.ok(source.includes('interactiveLogin=true;try{const signedIn=await Cloud.login();'));
- assert.ok(source.includes('finally{interactiveLogin=false;'));
- assert.ok(source.includes('if(next&&interactiveLogin)return;'), 'Auth observer must not race the interactive login route.');
-});
+// Empty-account startup and interactive-login races are exercised through real
+// UI behavior in ui-persistence.py; avoid asserting app.js source formatting.
