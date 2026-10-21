@@ -17,6 +17,7 @@ import threading
 import time
 import traceback
 import wave
+from contextlib import contextmanager
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -130,11 +131,17 @@ def idle(page):
 
 
 def reveal(page, selector):
+    # Open each enclosing panel once with its native summary. In particular,
+    # caption blur must not swallow the first click; no Tab or retry hides that
+    # interaction regression. Re-resolve ancestors after any outer panel opens.
+    count = page.locator(selector).locator("xpath=ancestor::details").count()
+    for index in range(count):
+        panel = page.locator(selector).locator("xpath=ancestor::details").nth(index)
+        if panel.get_attribute("open") is None:
+            panel.locator(":scope > summary").click()
     control = page.locator(selector)
-    parent = control.locator("xpath=ancestor::details[1]")
-    if parent.count() and parent.get_attribute("open") is None:
-        parent.locator("summary").first.click()
-    return page.locator(selector)
+    control.wait_for(state="visible")
+    return control
 
 
 def stored(page, owner, identifier):
@@ -193,6 +200,31 @@ def assert_single_account_project(page, owner):
     return rows["active"]
 
 
+@contextmanager
+def browser_runtime():
+    """Capture evidence and close the browser before Playwright stops its loop."""
+    global browser
+    with sync_playwright() as playwright:
+        try:
+            yield playwright
+        except Exception:
+            REPORT["failure"] = traceback.format_exc()
+            if page:
+                try:
+                    page.screenshot(path=str(OUT / "failure.png"), full_page=True, timeout=3000)
+                    REPORT["visibleFailureState"] = page.locator("body").inner_text()[-5000:]
+                except Exception as error:
+                    REPORT["artifactError"] = str(error)
+            raise
+        finally:
+            if browser:
+                try:
+                    browser.close()
+                except Exception as error:
+                    REPORT.setdefault("cleanupErrors", []).append(str(error))
+                browser = None
+
+
 server = None
 browser = None
 page = None
@@ -204,7 +236,7 @@ try:
         server = ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(QuietHandler, directory=str(ROOT / "public")))
         threading.Thread(target=server.serve_forever, daemon=True).start()
         base = f"http://127.0.0.1:{server.server_port}"
-        with sync_playwright() as playwright:
+        with browser_runtime() as playwright:
             launch = {"executable_path": os.environ["NORN_CHROMIUM"]} if os.environ.get("NORN_CHROMIUM") else {}
             browser = playwright.chromium.launch(headless=True, **launch)
 
@@ -256,12 +288,14 @@ try:
             page.wait_for_selector(".clip")
             idle(page)
             assert first_id == page.evaluate("sessionStorage.getItem('norn.cloud.project')")
+            manual_before = page.evaluate("""id=>JSON.parse(localStorage.getItem('norn.test.calls')||'[]')
+              .filter(call=>call.id===id&&call.event==='manual').length""", first_id)
             page.locator("#scene-caption").fill("Firebase에 직접 저장한 자막")
             page.locator('[data-action=save]').first.click()
             wait_cloud_caption(page, first_id, "Firebase에 직접 저장한 자막")
             assert not downloads, "Signed-in Save only exported a JSON"
             calls = page.evaluate("JSON.parse(localStorage.getItem('norn.test.calls')||'[]')")
-            assert any(call["id"] == first_id and call["event"] == "manual" for call in calls)
+            assert sum(call["id"] == first_id and call["event"] == "manual" for call in calls) == manual_before + 1, calls
             REPORT["checks"].append("signed-in Save invokes cloud adapter with manual event and does not download a JSON")
 
             # Close immediately after editing, while the cloud still has the old
@@ -390,17 +424,14 @@ try:
             browser.close()
             browser = None
 except Exception:
-    REPORT["failure"] = traceback.format_exc()
-    if page:
-        try:
-            page.screenshot(path=str(OUT / "failure.png"), full_page=True, timeout=3000)
-            REPORT["visibleFailureState"] = page.locator("body").inner_text()[-5000:]
-        except Exception:
-            pass
+    REPORT.setdefault("failure", traceback.format_exc())
     raise
 finally:
     if browser:
-        browser.close()
+        try:
+            browser.close()
+        except Exception as error:
+            REPORT.setdefault("cleanupErrors", []).append(str(error))
     if server:
         server.shutdown()
         server.server_close()

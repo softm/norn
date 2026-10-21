@@ -127,6 +127,18 @@ function selectScene(id){
  if(projectLoading||editingBusy()||!v().scenes.some(s=>s.id===id))return;
  selected=id;previewUrl='';render();focusTimeline();
 }
+function updateSceneTextLabels(){
+ const current=scene();if(!current)return;
+ const index=v().scenes.indexOf(current),name=current.name||'이름 없는 장면';
+ const clip=[...document.querySelectorAll('.clip')].find(element=>element.dataset.id===current.id);
+ if(clip){
+  clip.querySelector('.clip-top').textContent=name;
+  clip.querySelector('.clip-select').setAttribute('aria-label',`${index+1}번 ${name} 편집`);
+  clip.querySelector('.clip-delete').setAttribute('aria-label',`${index+1}번 ${name} 삭제`);
+ }
+ const image=$('#screen img.media');if(image)image.alt=current.name;
+ const note=$('.inspector .locknote');if(note)note.textContent=current.field_locks?.length?'● 직접 고친 문구는 자동 구성에서도 유지돼요.':'빈칸은 화면에 표시되지 않아요.';
+}
 function deleteScene(id=selected){
  if(editingBusy())return;
  const scenes=v().scenes,index=scenes.findIndex(s=>s.id===id);
@@ -393,7 +405,7 @@ async function copy(text){try{await navigator.clipboard.writeText(text);toast('�
 document.addEventListener('click',async e=>{const el=e.target.closest('[data-action]');if(!el)return;e.preventDefault();if(projectLoading)return;if(!authReady&&!['close','account'].includes(el.dataset.action))return toast('계정과 저장된 프로젝트를 확인하고 있습니다. 잠시 후 다시 시도하세요.');try{await actions[el.dataset.action]?.(el)}catch(err){modalError(err)}});
 document.addEventListener('focusin',()=>{inputHistoryTarget=null});
 document.addEventListener('input',e=>{if(projectLoading||browserStudio?.busy())return;const el=e.target,key=el.dataset.bind,s=scene();if(!key||!s)return;let val=el.type==='checkbox'?el.checked:['number','range'].includes(el.type)?Number(el.value):el.value;if(typeof val==='number'&&!Number.isFinite(val)||s[key]===val)return;if(inputHistoryTarget!==el){pushHistory();inputHistoryTarget=el}s[key]=val;if(['name','title','caption'].includes(key))s.field_locks=[...new Set([...(s.field_locks||[]),key])];previewUrl='';persist();document.querySelectorAll(`[data-bind="${key}"]`).forEach(other=>{if(other!==el)other.value=el.value});updateOverlay()});
-document.addEventListener('change',e=>{if(projectLoading||browserStudio?.busy())return;try{const el=e.target;if(el.dataset.timing)changeTiming(el.dataset.timing,Number(el.value));else if(el.id==='variant'){project.activeVariant=el.value;selected=v().scenes[0]?.id||'';previewUrl='';persist();render()}else if(el.id==='mute-all')edit(()=>v().audio.mute_original=el.checked);else if(el.id==='music')edit(()=>v().audio.music_id=el.value);else if(el.id==='music-volume')edit(()=>v().audio.music_volume=Number(el.value));else if(el.dataset.bind){persist();render()}}catch(err){toast(err.message)}});
+document.addEventListener('change',e=>{if(projectLoading||browserStudio?.busy())return;try{const el=e.target;if(el.dataset.timing)changeTiming(el.dataset.timing,Number(el.value));else if(el.id==='variant'){project.activeVariant=el.value;selected=v().scenes[0]?.id||'';previewUrl='';persist();render()}else if(el.id==='mute-all')edit(()=>v().audio.mute_original=el.checked);else if(el.id==='music')edit(()=>v().audio.music_id=el.value);else if(el.id==='music-volume')edit(()=>v().audio.music_volume=Number(el.value));else if(el.dataset.bind){persist();if(['name','title','caption'].includes(el.dataset.bind))updateSceneTextLabels();else render()}}catch(err){toast(err.message)}});
 document.addEventListener('dragstart',e=>{
  const el=e.target.closest('.clip');if(!el)return;
  if(editingBusy()||e.target.closest('.clip-delete')){e.preventDefault();return}
