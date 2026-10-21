@@ -1,4 +1,4 @@
-import * as Cloud from './firebase-v2.js?v=0.5.3';
+import * as Cloud from './firebase-v2.js?v=0.5.4';
 import {configStatus,authMessage} from './firebase-config-utils.js';
 const el=id=>document.getElementById(id);
 function status(id,text,ok=null){const n=el(id);n.textContent=text;n.className=ok===null?'':ok?'ok':'bad';}
