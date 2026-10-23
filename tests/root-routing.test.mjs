@@ -49,6 +49,15 @@ test('root diagnostic links stay at root',async()=>{
   assert.match(entry,/href="\.\/"/);
   assert.doesNotMatch(entry,/<a[^>]+href="\.\/public\//);
 });
+test('index landing and workspace are distinct routes',async()=>{
+  const source=await text('public/app.js');
+  assert.match(source,/function home\(\)\{if\(workspaceRequested\)return workspaceHome\(\)/);
+  assert.doesNotMatch(source,/if\(user\|\|workspaceRequested\|\|localRows\.length\)return workspaceHome\(\)/);
+  assert.match(source,/data-action="workspace">내 프로젝트<\/button>/);
+  assert.match(source,/location\.hash==='#workspace'/);
+  assert.match(source,/window\.history\.replaceState\(null,'',location\.pathname\+location\.search\+'#workspace'\)/);
+});
+
 test('runtime config resolves relative to its module, not the document',async()=>{
   const original=globalThis.fetch;let requested;
   globalThis.fetch=async url=>{requested=String(url);return {ok:true,json:async()=>({enabled:false,firebase:null})};};

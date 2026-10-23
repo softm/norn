@@ -187,7 +187,7 @@ def open_project(page, identifier):
 
 
 def workspace(page):
-    page.locator('.topbar [data-action=home]').first.click()
+    page.locator('.topbar [data-action=workspace]').first.click()
     page.wait_for_selector(".project-workspace")
 
 
@@ -281,12 +281,18 @@ try:
             downloads = []
             page.on("download", lambda download: downloads.append(download.suggested_filename))
             page.goto(base + "/", wait_until="networkidle")
-            # An empty signed-in account starts one project automatically. The
-            # auth observer and route initialization must not each create one.
+            # Signed-in root stays a real landing page. The workspace and editor
+            # open only after explicit navigation and project creation.
+            page.wait_for_selector(".landing")
+            assert not page.locator(".project-workspace").count() and not page.locator(".studio").count()
+            page.locator('.topbar [data-action=workspace]').first.click()
+            page.wait_for_selector(".project-workspace")
+            assert not page.locator(".workspace-project-card").count()
+            page.locator('[data-action=new-project]').first.click()
             page.wait_for_selector(".studio")
             first_id = assert_single_account_project(page, OWNER)
             assert not page.locator(".asset").count() and not page.locator(".clip").count()
-            REPORT["checks"].append("empty signed-in workspace automatically creates exactly one durable project and opens its editor")
+            REPORT["checks"].append("signed-in index remains landing; explicit workspace navigation and new-project action create exactly one durable project")
             choose(page, [source / "project-a.png", source / "music.wav"])
             page.wait_for_selector(".clip")
             idle(page)
@@ -329,8 +335,8 @@ try:
             assert second_id and second_id != first_id
             page.locator("#scene-caption").fill("두 번째 프로젝트의 자막")
             # Exercise native URL/history navigation, not only app buttons:
-            # removing the hash must flush the current project's pending edit.
-            page.evaluate("location.hash=''")
+            # the explicit workspace hash must flush the current project's pending edit.
+            page.evaluate("location.hash='#workspace'")
             page.wait_for_selector(".project-workspace")
             page.go_back(wait_until="domcontentloaded")
             page.wait_for_selector(".studio")
@@ -354,25 +360,34 @@ try:
             # A different account gets a distinct workspace even on this device.
             page.evaluate("localStorage.setItem('norn.test.uid','other-persistence-user');sessionStorage.removeItem('norn.cloud.project')")
             page.goto(base + "/", wait_until="networkidle")
+            page.wait_for_selector(".landing")
+            page.locator('.topbar [data-action=workspace]').first.click()
+            page.wait_for_selector(".project-workspace")
+            page.locator('[data-action=new-project]').first.click()
             page.wait_for_selector(".studio")
             other_id = assert_single_account_project(page, "other-persistence-user")
             assert other_id not in (first_id, second_id)
             assert not page.locator(".asset").count() and not page.locator(".clip").count()
             assert stored(page, "other-persistence-user", first_id) is None
-            REPORT["checks"].append("account namespace isolation starts one independent empty project and keeps previous account projects/originals hidden")
+            REPORT["checks"].append("account namespace isolation keeps root on landing and creates an independent project only after explicit workspace action")
             context.close()
 
             # Interactive login invokes the observer before login() resolves, as
-            # a real auth SDK can. Only the interactive path may create a draft.
+            # a real auth SDK can. Login routes to the workspace but must not
+            # silently create a project.
             context = browser.new_context(viewport={"width": 1280, "height": 950})
             watch(context, base)
             page = context.new_page()
             page.goto(base + "/", wait_until="networkidle")
             page.locator('.topbar [data-action=account]').first.click()
             page.locator('.modal [data-action=login]').click()
+            page.wait_for_selector(".project-workspace")
+            assert not page.locator(".studio").count()
+            assert not page.locator(".workspace-project-card").count()
+            page.locator('[data-action=new-project]').first.click()
             page.wait_for_selector(".studio")
             assert_single_account_project(page, OWNER)
-            REPORT["checks"].append("interactive login with auth observer notification creates exactly one project, without duplicate automatic drafts")
+            REPORT["checks"].append("interactive login routes to workspace without a hidden draft; explicit new-project creates exactly one project")
             context.close()
 
             # An unavailable list is not evidence of an empty account. Creating
@@ -383,6 +398,8 @@ try:
                                     "localStorage.setItem('norn.test.listFailure','true')")
             page = context.new_page()
             page.goto(base + "/", wait_until="networkidle")
+            page.wait_for_selector(".landing")
+            page.locator('.topbar [data-action=workspace]').first.click()
             page.wait_for_selector(".project-workspace")
             assert not page.locator(".studio").count()
             assert page.evaluate("JSON.parse(localStorage.getItem('norn.test.calls')||'[]')") == []
