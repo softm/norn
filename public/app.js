@@ -519,18 +519,25 @@ window.SoftmSiteState=Object.freeze({
  }
 });
 
-// Keep browser-only editing fully offline until the user requests the optional common vault.
+// Keep editing offline; common identity and optional backup have separate entry points.
 {
- const launcher=document.createElement('button');launcher.type='button';launcher.textContent='내 보관소';
- launcher.title='공통 계정으로 프로젝트 암호화 백업·복원';
- let connected=false;
- const place=()=>{if(!connected&&!launcher.isConnected)(document.querySelector('.header-actions, .top-actions, header')||app).appendChild(launcher);};
+ const entry=document.createElement('span');entry.className='common-account-entry';
+ const buttons=['로그인','회원가입','내 보관소'].map(text=>{const b=document.createElement('button');b.type='button';b.textContent=text;entry.appendChild(b);return b;});
+ let mounted=false,busy=false;
+ const place=()=>{if(!mounted&&!entry.isConnected)(document.querySelector('.header-actions, .top-actions, header')||app).appendChild(entry);};
  const observer=new MutationObserver(place);observer.observe(app,{childList:true,subtree:true});place();
- launcher.addEventListener('click',async()=>{
-  launcher.disabled=true;
+ buttons.forEach((button,index)=>button.addEventListener('click',async()=>{
+  if(busy)return;
+  const popup=index<2?window.open('about:blank','_blank','popup,width=520,height=760'):null;
+  if(index<2&&!popup){toast('로그인 팝업을 허용해 주세요.');return;}
+  busy=true;buttons.forEach(b=>b.disabled=true);
   try{
-   const {mountRegisteredSite}=await import('https://softm.github.io/shared/platform/v1/boot.mjs?v=20261028');
-   const vault=mountRegisteredSite('norn');connected=true;observer.disconnect();launcher.remove();vault?.open();
-  }catch{toast('공통 보관소를 불러오지 못했습니다. 기기 편집 기능은 계속 사용할 수 있습니다.');launcher.disabled=false;}
- });
+   const {mountRegisteredSite}=await import('https://softm.github.io/shared/platform/v1/boot.mjs?v=20261029-account-1');
+   const integration=mountRegisteredSite('norn');
+   if(!integration)throw Error('account-unavailable');
+   mounted=true;observer.disconnect();entry.remove();
+   if(index===2)integration.open();else await integration.account.login({popup,mode:index===1?'signup':'login'});
+  }catch{popup?.close();toast('공통 계정 연결을 완료하지 못했습니다. 다시 시도해 주세요. 기기 편집은 계속 사용할 수 있습니다.');}
+  finally{busy=false;buttons.forEach(b=>b.disabled=false);}
+ }));
 }
