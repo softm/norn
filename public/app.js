@@ -519,4 +519,18 @@ window.SoftmSiteState=Object.freeze({
  }
 });
 
-import('https://softm.github.io/shared/platform/v1/boot.mjs?site=norn&v=20261028').catch(()=>toast('공통 보관소를 불러오지 못했습니다. 기기 편집 기능은 계속 사용할 수 있습니다.'));
+// Keep browser-only editing fully offline until the user requests the optional common vault.
+{
+ const launcher=document.createElement('button');launcher.type='button';launcher.textContent='내 보관소';
+ launcher.title='공통 계정으로 프로젝트 암호화 백업·복원';
+ let connected=false;
+ const place=()=>{if(!connected&&!launcher.isConnected)(document.querySelector('.header-actions, .top-actions, header')||app).appendChild(launcher);};
+ const observer=new MutationObserver(place);observer.observe(app,{childList:true,subtree:true});place();
+ launcher.addEventListener('click',async()=>{
+  launcher.disabled=true;
+  try{
+   const {mountRegisteredSite}=await import('https://softm.github.io/shared/platform/v1/boot.mjs?v=20261028');
+   const vault=mountRegisteredSite('norn');connected=true;observer.disconnect();launcher.remove();vault?.open();
+  }catch{toast('공통 보관소를 불러오지 못했습니다. 기기 편집 기능은 계속 사용할 수 있습니다.');launcher.disabled=false;}
+ });
+}
