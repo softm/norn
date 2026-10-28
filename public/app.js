@@ -518,3 +518,5 @@ window.SoftmSiteState=Object.freeze({
   await loadCloudProject(copy.id,{flush:false});
  }
 });
+
+import('https://softm.github.io/shared/platform/v1/boot.mjs?site=norn&v=20261028').catch(()=>toast('공통 보관소를 불러오지 못했습니다. 기기 편집 기능은 계속 사용할 수 있습니다.'));
