@@ -497,3 +497,40 @@ Cloud.observe(next=>{onAccount(next).catch(error=>{authReady=true;modalError(err
 });
 setInterval(poll,1200);
 function historyReplace(){window.history.replaceState(null,'','#studio')}
+
+// Common account transport backs up editing metadata, never original media or local paths.
+window.SoftmSiteState=Object.freeze({
+ siteId:'norn',
+ scope:()=>(user?.uid||'guest')+':'+project.id,
+ read(){
+  if(projectLoading||!authReady||editingBusy())throw Error('현재 편집 작업이 끝난 뒤 보관소를 사용해 주세요.');
+  return W.cloudData({...project,assets:W.assetManifest(media)});
+ },
+ validate:value=>W.cloudData(value),
+ async write(value){
+  if(user)throw Error('기존 노른 Google 계정에서 로그아웃한 뒤 기기 모드에서 복원해 주세요. 기존 프로젝트는 유지됩니다.');
+  if(projectLoading||editingBusy())throw Error('현재 편집 작업이 끝난 뒤 복원해 주세요.');
+  const next=W.cloudData(value);await flushCurrent();await waitCloudSync();
+  if(user||projectLoading||editingBusy())throw Error('계정 또는 편집 상태가 바뀌어 복원을 중단했습니다.');
+  const copy={...next,id:D.uid(),title:(next.title+' · 복원본').slice(0,160),revision:0};
+  await Local.save('guest',copy,[],{cloudRevision:0,cloudDirty:false,editVersion:0});
+  if(user||projectLoading||editingBusy())throw Error('작업 상태가 바뀌었습니다. 복원 사본은 기기 모드에 보관했습니다.');
+  await loadCloudProject(copy.id,{flush:false});
+ }
+});
+
+// Keep browser-only editing fully offline until the user requests the optional common vault.
+{
+ const launcher=document.createElement('button');launcher.type='button';launcher.textContent='내 보관소';
+ launcher.title='공통 계정으로 프로젝트 암호화 백업·복원';
+ let connected=false;
+ const place=()=>{if(!connected&&!launcher.isConnected)(document.querySelector('.header-actions, .top-actions, header')||app).appendChild(launcher);};
+ const observer=new MutationObserver(place);observer.observe(app,{childList:true,subtree:true});place();
+ launcher.addEventListener('click',async()=>{
+  launcher.disabled=true;
+  try{
+   const {mountRegisteredSite}=await import('https://softm.github.io/shared/platform/v1/boot.mjs?v=20261028');
+   const vault=mountRegisteredSite('norn');connected=true;observer.disconnect();launcher.remove();vault?.open();
+  }catch{toast('공통 보관소를 불러오지 못했습니다. 기기 편집 기능은 계속 사용할 수 있습니다.');launcher.disabled=false;}
+ });
+}
