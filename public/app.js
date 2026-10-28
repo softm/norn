@@ -497,3 +497,24 @@ Cloud.observe(next=>{onAccount(next).catch(error=>{authReady=true;modalError(err
 });
 setInterval(poll,1200);
 function historyReplace(){window.history.replaceState(null,'','#studio')}
+
+// Common account transport backs up editing metadata, never original media or local paths.
+window.SoftmSiteState=Object.freeze({
+ siteId:'norn',
+ scope:()=>(user?.uid||'guest')+':'+project.id,
+ read(){
+  if(projectLoading||!authReady||editingBusy())throw Error('현재 편집 작업이 끝난 뒤 보관소를 사용해 주세요.');
+  return W.cloudData({...project,assets:W.assetManifest(media)});
+ },
+ validate:value=>W.cloudData(value),
+ async write(value){
+  if(user)throw Error('기존 노른 Google 계정에서 로그아웃한 뒤 기기 모드에서 복원해 주세요. 기존 프로젝트는 유지됩니다.');
+  if(projectLoading||editingBusy())throw Error('현재 편집 작업이 끝난 뒤 복원해 주세요.');
+  const next=W.cloudData(value);await flushCurrent();await waitCloudSync();
+  if(user||projectLoading||editingBusy())throw Error('계정 또는 편집 상태가 바뀌어 복원을 중단했습니다.');
+  const copy={...next,id:D.uid(),title:(next.title+' · 복원본').slice(0,160),revision:0};
+  await Local.save('guest',copy,[],{cloudRevision:0,cloudDirty:false,editVersion:0});
+  if(user||projectLoading||editingBusy())throw Error('작업 상태가 바뀌었습니다. 복원 사본은 기기 모드에 보관했습니다.');
+  await loadCloudProject(copy.id,{flush:false});
+ }
+});
