@@ -6,7 +6,7 @@ for(const name of ['index.html','setup.html']){
   // Only assets change location. Anchors and navigation stay on the current route.
   const entry=source.replace(/\b(href|src)="(\.\/[^"]+)"/g,(attribute,key,reference)=>{
     const asset=new URL(reference,new URL('public/'+name,root));
-    return /\.(?:css|js)$/.test(asset.pathname)?`${key}="./public/${reference.slice(2)}"`:attribute;
+    return /\.(?:css|m?js)$/.test(asset.pathname)?`${key}="./public/${reference.slice(2)}"`:attribute;
   });
   await writeFile(new URL(name,root),entry);
 }

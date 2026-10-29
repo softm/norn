@@ -15,7 +15,7 @@ for(const name of ['index.html','setup.html']){
       const original=sourceRefs[i],generated=entryRefs[i];
       assert.equal(generated[1],original[1]);
       const sourceURL=new URL(original[2],new URL('public/'+name,root));
-      if(original[2].startsWith('./')&&['.css','.js'].some(ext=>sourceURL.pathname.endsWith(ext))){
+      if(original[2].startsWith('./')&&['.css','.js','.mjs'].some(ext=>sourceURL.pathname.endsWith(ext))){
         assert.ok(generated[2].startsWith('./public/'),'Root assets must load from public/.');
         const entryURL=new URL(generated[2],new URL(name,root));
         assert.equal(entryURL.href,sourceURL.href,'Root and public assets must resolve to the same file, query and hash.');
@@ -28,20 +28,28 @@ for(const name of ['index.html','setup.html']){
     assert.doesNotMatch(entry,/<iframe\b|<base\b|http-equiv=["']refresh|location\.(?:replace|assign)\(/i);
   });
 }
-test('root entry contains the application DOM and loads its actual module',async()=>{
+test('root entry loads exactly the application and shared-account adapter modules',async()=>{
   const entry=await text('index.html');
   for(const id of ['app','modal-root','toast'])assert.ok(entry.includes(`id="${id}"`));
   const modules=[...entry.matchAll(/<script\b([^>]*)>/g)].map(match=>
     Object.fromEntries([...match[1].matchAll(/\b([a-z-]+)="([^"]*)"/g)].map(attribute=>[attribute[1],attribute[2]]))
   ).filter(attributes=>attributes.type==='module');
-  assert.equal(modules.length,1);
-  assert.ok(modules[0].src,'The module script needs an actual source file.');
-  const appURL=new URL(modules[0].src,new URL('index.html',root));
-  assert.equal(appURL.pathname,new URL('public/app.js',root).pathname);
-  assert.equal(appURL.searchParams.get('v'),version,'The entry module must use the current release cache version.');
+  assert.equal(modules.length,2);
+  const moduleURLs=modules.map(attributes=>{assert.ok(attributes.src,'Each module needs an actual source file.');return new URL(attributes.src,new URL('index.html',root));});
+  assert.deepEqual(moduleURLs.map(url=>url.pathname),['public/app.js','public/account-menu.mjs'].map(file=>new URL(file,root).pathname));
+  assert.equal(moduleURLs[0].searchParams.get('v'),version,'The app must use the current release cache version.');
+  assert.equal(moduleURLs[1].searchParams.get('v'),'20261030-menu-1','The account adapter must use its published cache version.');
   const style=references(entry).find(reference=>new URL(reference[2],root).pathname===new URL('public/browser-studio.css',root).pathname);
   assert.ok(style,'The browser studio stylesheet must be present.');
   assert.equal(new URL(style[2],root).searchParams.get('v'),version,'The changed stylesheet must use the current release cache version.');
+  assert.ok(references(entry).some(reference=>new URL(reference[2],root).pathname===new URL('public/account-menu.css',root).pathname));
+});
+test('shared account adapter leaves native workspace identities and storage unchanged',async()=>{
+  const adapter=await text('public/account-menu.mjs'),css=await text('public/account-menu.css');
+  assert.match(adapter,/SoftmAccounts\?\.has\('norn'\)/);
+  assert.match(adapter,/mountRegisteredSite\('norn'\)/);
+  assert.doesNotMatch(adapter,/signInWithCustomToken|updateProfile|localStorage\.(?:clear|removeItem)|indexedDB\.deleteDatabase/);
+  assert.match(css,/html\[data-norn-account-menu="ready"\] \.common-account-entry/);
 });
 test('root diagnostic links stay at root',async()=>{
   const entry=await text('setup.html');
