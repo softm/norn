@@ -1,0 +1,3 @@
+/* Keep the legacy entry as a fallback, but show only the shared icon once ready. */
+html[data-norn-account-menu="ready"] .common-account-entry{display:none!important}
+softm-site-account[data-site="norn"]{--softm-account-accent:#ebba62;--softm-account-border:#d9c6a0;flex-shrink:0}
