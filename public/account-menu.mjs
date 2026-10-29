@@ -1,6 +1,11 @@
 // Identity UI only. Existing Norn Firebase users and workspace storage are not
 // migrated or merged. The optional common vault keeps its existing bridge.
 async function mount() {
+  // The local engine has an existing no-external-requests startup contract.
+  // Its origin is not an approved common-account production origin. Preserve
+  // the explicit, lazy account entry there instead of contacting production
+  // merely to open a local editor. Public web deployments mount automatically.
+  if(location.protocol==='file:' || ['localhost','127.0.0.1','[::1]','appassets.androidplatform.net'].includes(location.hostname))return;
   try {
     const {mountRegisteredSite}=await import('https://softm.github.io/shared/platform/v1/boot.mjs?v=20261030-menu-1');
     // The legacy lazy entry can win the race if clicked during module loading.
